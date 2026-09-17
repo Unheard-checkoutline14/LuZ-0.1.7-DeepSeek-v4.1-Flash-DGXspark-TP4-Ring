@@ -7,7 +7,9 @@ across **4× NVIDIA DGX Spark (GB10)** connected as a **switchless RoCE ring** (
 
 > 中文说明：[README.zh-CN.md](README.zh-CN.md) · 部署方案与基准对比：[docs/](docs/)
 
-**Measured on 4× DGX Spark (GB10, sm_121a, switchless ring), 1M ctx / 5M KV pool.**
+**Measured on 4× DGX Spark (GB10, sm_121a, switchless ring). Production now runs 600K context / 9.6M KV pool (see docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md).**
+
+**Full 600K production board**: [docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md) — DE free-form + DE structured (xgrammar) + PR 30-cell + GSM8K 0.9600, with fp4-indexer A/B and RoCEnante verdict.
 Thinking mode is given as `OFF · ON`; the build these numbers came from is pinned in
 [BUILD-IDENTITY.md](BUILD-IDENTITY.md).
 
