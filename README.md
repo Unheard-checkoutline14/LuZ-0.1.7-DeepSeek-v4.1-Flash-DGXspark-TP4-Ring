@@ -81,9 +81,25 @@ c6 260 → 236 (an EP2 side effect; c8/c12 rise far more).
 - `adapter/` — SGLang patches (Engram row store C++, MXFP8 backend, shared-expert K pad, prefill cache hook)
 - `scripts/` — SSH helper, verify/ probe kit, self-heal monitor + systemd unit, `gate.sh`, `nccl_selfcheck.sh`
 - `bench/` — gate suite (needle / corruption / termination / code-gate), vision gate, event-timeline matrix + common-window analysis, prose, GSM8K spot, third-party-shaped sweep
-- `.env.tp4.ring.example` — the configuration this repo actually runs (sanitized, with the measured rationale for each deviation)
+- `.env.tp4.example` — the configuration this repo actually runs (sanitized template; the live `.env.tp4` is gitignored)
 - `BUILD-IDENTITY.md` — image IDs, SGLang commit, component versions, content md5s
 - `docs/` — deployment plan, upstream ISSUE/PR survey, benchmark comparison (sanitized export)
+
+## Image download (release artifact)
+
+The serving image (13.5 GiB) is distributed via cloud drive:
+
+- **Baidu Netdisk**: https://pan.baidu.com/s/1QjmmRu8GbFpWTBRkWslvBQ?pwd=luzi (extract code: `luzi`)
+- **File**: `LuZ-0.1.7-DSV41F-image.tar.zst`
+- **Size**: 14,463,467,578 bytes (13.5 GiB)
+- **MD5**: `10307040cd70ab23436bf34eee829d24`
+- **Image identity**: layers-json sha256 `e541746d26e31a3f` (must match on all 4 nodes)
+
+Load after download (all four nodes need the image; workers = squashed 2-layer form):
+
+```bash
+docker load -i LuZ-0.1.7-DSV41F-image.tar.zst   # requires zstd; decompresses to dsv41-sglang-optimized:v7
+```
 
 ## Sanitization
 

@@ -10,6 +10,13 @@
 #
 # 用法：nccl_selfcheck.sh [debug_dir] [expected_hca_count]
 #   默认 debug_dir=$HOME/nccl-debug, expected_hca_count=4
+#
+# ★2026-09-16：检查项 1-4 **全部依赖 NCCL 初始化日志**，而生产默认 NCCL_DEBUG=WARN
+#   （调试期的 INFO + NCCL_DEBUG_FILE 已在交付前清查中关闭，见 .env.tp4 注释）。
+#   没有日志时旧版打印 "[x] 未找到 NCCL 调试日志" 并 exit 1 ⇒ 每次起栈刷一条
+#   "NCCL 自检未通过" 的假警报，而它其实什么都没查 —— 正是要消灭的"喊狼来了"。
+#   现在：NCCL_DEBUG 未开 ⇒ 明确报 **不适用** 并 exit 0（既不冒充失败，也不冒充通过）；
+#   要用本检查时，在维护窗口设 NCCL_DEBUG=INFO + NCCL_DEBUG_FILE 并挂调试目录，起一靴后再跑。
 
 set -uo pipefail
 
@@ -18,11 +25,31 @@ EXPECT_HCA="${2:-4}"
 fail=0
 
 log=$(ls -t "$DBG_DIR"/*.log 2>/dev/null | head -1)
+# ★陈旧证据也是失效证据：`ls -t` 会把**上一次靴**留下的日志当成"最新"，
+#   于是本检查会对着一份描述旧容器的日志报 PASS（实测：NCCL_DEBUG 关掉后本脚本
+#   仍读到 15:16 那靴的日志并全绿）。判据 = 日志必须落在 MAX_AGE 秒内。
+MAX_AGE="${NCCL_SELFCHECK_MAX_AGE:-3600}"
+reason=""
 if [[ -z "${log:-}" ]]; then
-  echo "[x] 未找到 NCCL 调试日志（$DBG_DIR/*.log）——确认 NCCL_DEBUG_FILE 已设且服务已启动"
-  exit 1
+  reason="未找到 NCCL 调试日志（$DBG_DIR/*.log）"
+elif [[ -z "$(find "$log" -newermt "-${MAX_AGE} seconds" 2>/dev/null)" ]]; then
+  reason="最新日志已过期：$log（早于 ${MAX_AGE}s 前）——它描述的是上一次靴，不是当前这次"
 fi
-echo "[i] 检查日志: $log"
+if [[ -n "$reason" ]]; then
+  case "${NCCL_DEBUG:-WARN}" in
+    WARN|warn|''|NONE|none)
+      echo "[i] NCCL 自检 **不适用**：${reason}"
+      echo "    且 NCCL_DEBUG=${NCCL_DEBUG:-<unset>}（生产默认 WARN）⇒ 没有当前靴的初始化日志可查，"
+      echo "    检查项 1-4 无从判定。**这不是失败，也不是通过。**"
+      echo "    需要本检查时：维护窗口设 NCCL_DEBUG=INFO + NCCL_DEBUG_FILE=/nccl-debug/nccl-%h-%p.log"
+      echo "    并把调试目录挂进容器，起一靴后再跑本脚本。"
+      exit 0 ;;
+    *)
+      echo "[x] ${reason}，而 NCCL_DEBUG=${NCCL_DEBUG} 已开 —— 确认 NCCL_DEBUG_FILE 所指目录已挂进容器、服务已启动、日志确实在写"
+      exit 1 ;;
+  esac
+fi
+echo "[i] 检查日志: $log（${MAX_AGE}s 内）"
 
 # 1. RING-ONLY 补丁
 if grep -q 'RING-ONLY v' "$log"; then

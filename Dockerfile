@@ -1,6 +1,8 @@
-# Arm64 sibling of the 0xSero pin (lmsysorg/sglang:dev-dsv41, linux/amd64
-# digest sha256:c4ca651192e57e91989b5176c3665148131b9a171e53861dee87f5e57cef25b5).
-FROM lmsysorg/sglang:dev-dsv41
+# Arm64 sibling of the 0xSero pin. Digest-pinned 2026-09-14: the dev-dsv41 tag
+# drifted twice without carrying the #39173 fix (last re-push 2026-09-11).
+# sha256:4a5d132a... = the multi-arch index whose arm64 leaf we verified
+# running locally (all five adapter hooks + row_store/flash_mla md5 clean).
+FROM lmsysorg/sglang@sha256:4a5d132a06a77c8331e15845f2e925adc788b00105097ad55409afa3f4fa4860
 WORKDIR /opt/dsv41
 COPY adapter /opt/dsv41/adapter
 RUN g++ -O2 -Wall -Wextra -Werror -std=c++17 -shared -fPIC -pthread \

@@ -1,4 +1,14 @@
+# === LuZ-0.1.7-DSV41F R0 gate (2026-09-17) ===
+# secrets / runtime state
 .env
 .env.tp4
+.env.tp4.*
+!.env.tp4.example
 state/
+state-tp4/
 logs/
+logs-tp4/
+*.bak*
+__pycache__/
+*.pyc
+# backups live OUTSIDE the repo (~/r0-backup-*/), never commit them

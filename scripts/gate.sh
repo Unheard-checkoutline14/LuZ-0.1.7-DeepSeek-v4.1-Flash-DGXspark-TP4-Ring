@@ -14,7 +14,7 @@
 set -uo pipefail
 
 PORT="${SERVER_PORT:-8899}"
-KEY_FILE="${API_KEY_FILE:-$HOME/dsv41-4x-spark/state-tp4/api-key}"
+KEY_FILE="${API_KEY_FILE:-$HOME/dsv41-flash-dgxsparks/state-tp4/api-key}"
 BASE="http://127.0.0.1:${PORT}"
 FULL=0
 JSON=0
@@ -100,12 +100,17 @@ else
 fi
 
 # ── 5/6. corruption + code-gate（复用 gates_suite，容器内跑） ───────────────
-gs=""
-for c in "/state/gates_suite.py" "$HOME/dsv41-4x-spark/state-tp4/gates_suite.py"; do
-  [[ -f "$c" ]] && gs="$c" && break
-done
+# gates_suite.py 必须在 /state（= 宿主 state-tp4/）里，否则下面这三档会**静默跳过**。
+# 历史教训：那段"跳过"曾经一挂就是很多天——W3 记录里 /state 从来没有过这个工件，而
+# gate.sh 照报"GATE PASSED（4 项）"，看不出深档根本没跑。所以：能自动落位就落位，
+# 落不了位就判**失败**（判据跑不起来本身就是失败，不是"跳过"）。
+SUITE_SRC="$HOME/dsv41-flash-dgxsparks/bench/gates_suite.py"
+if [[ -f "$SUITE_SRC" ]] && ! docker exec dsv41-head test -f /state/gates_suite.py 2>/dev/null; then
+  cp "$SUITE_SRC" "$HOME/dsv41-flash-dgxsparks/state-tp4/gates_suite.py" 2>/dev/null \
+    && echo "[*] 已把 gates_suite.py 落位到 state-tp4/（此前 /state 里没有它 ⇒ 深档会被跳过）"
+fi
 if docker exec dsv41-head test -f /state/gates_suite.py 2>/dev/null; then
-  out=$(docker exec -w /state dsv41-head python3 /state/gates_suite.py --corruption --code 2>&1)
+  out=$(docker exec -w /state dsv41-head python3 /state/gates_suite.py --corruption --code --key "$KEY" 2>&1)
   if echo "$out" | grep -q 'U+FFFD=0' && ! echo "$out" | grep -q 'FAIL'; then
     ok "corruption probe 0/0/0"
   else
@@ -117,18 +122,28 @@ if docker exec dsv41-head test -f /state/gates_suite.py 2>/dev/null; then
     bad "code-gate: $(echo "$out" | grep -m1 'code-gate total' || echo 未完成)"
   fi
 else
-  echo "[!] gates_suite 不在容器内，跳过 corruption/code-gate"
+  bad "gates_suite 不在容器内（深档 corruption/code-gate 跑不了；判据缺失≠通过）"
 fi
 
 # ── 全档：终止性 + needle 梯度 ─────────────────────────────────────────────
 if [[ "$FULL" -eq 1 ]]; then
-  out=$(docker exec -w /state dsv41-head python3 /state/gates_suite.py --termination 2>&1)
+  out=$(docker exec -w /state dsv41-head python3 /state/gates_suite.py --termination --key "$KEY" 2>&1)
   if [[ "$(echo "$out" | grep -c '18/18 stop')" -eq 2 ]]; then ok "终止性 18/18 · 18/18"
   else bad "终止性: $(echo "$out" | tr '\n' ' ')"; fi
 
-  out=$(docker exec -w /state dsv41-head python3 /state/gates_suite.py --needle 2>&1)
-  if [[ "$(echo "$out" | grep -c ' PASS')" -eq 3 ]]; then ok "needle 30K/229K/470K 全 PASS"
-  else bad "needle: $(echo "$out" | tr '\n' ' ' | cut -c1-160)"; fi
+  out=$(docker exec -w /state dsv41-head python3 /state/gates_suite.py --needle --key "$KEY" 2>&1)
+  # 本栈 max_model_len=262144 ⇒ 470K 档**结构性**超出上下文，预期报 HTTP 400（W3 已记录）。
+  # 所以判据是"≥2 档 PASS"，而不是"3 档全 PASS"：后者是个永远不可能满足的条件，会把每次
+  # 全档门都判失败，训练人忽略门。同时两个方向都留着：3 档全 PASS 也算过（将来 ctx 变大时
+  # 成立），而 30K/229K 任一失败、或 470K 既没 PASS 也没报 400，都判失败。
+  n_pass=$(printf '%s' "$out" | grep -c ' PASS')
+  if [[ "$n_pass" -ge 3 ]]; then
+    ok "needle 30K/229K/470K 全 PASS"
+  elif [[ "$n_pass" -eq 2 ]] && printf '%s' "$out" | grep -q 'HTTP Error 400'; then
+    ok "needle 30K/229K 全 PASS（470K 档 HTTP 400 = 超本栈 ctx 262144，该档不适用）"
+  else
+    bad "needle: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-160)"
+  fi
 fi
 
 # ── 汇总 ──────────────────────────────────────────────────────────────────

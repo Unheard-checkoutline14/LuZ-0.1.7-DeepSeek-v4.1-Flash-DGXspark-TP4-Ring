@@ -26,7 +26,7 @@ while :; do
   if [ "$FAILS" -lt 3 ]; then sleep 60; continue; fi
   echo "[dsv41-monitor] $(date) rebuild: container=$(docker ps -q --filter name=$NAME | wc -l) /health=$(curl -s -m 8 -o /dev/null -w '%{http_code}' $URL 2>/dev/null)" >> "$ROOT/logs-tp4/monitor.log"
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  for h in 192.168.1.56 192.168.1.58 192.168.1.57; do
+  for h in <WIP_R1> <WIP_R2> <WIP_R3>; do
     ssh -o BatchMode=yes -o ConnectTimeout=8 spark@$h 'docker rm -f dsv41-worker >/dev/null 2>&1' 2>/dev/null || true
   done
   cd "$ROOT" && ENV_FILE=.env.tp4 ./start-tp4.sh serve >> "$ROOT/logs-tp4/monitor.log" 2>&1 || true

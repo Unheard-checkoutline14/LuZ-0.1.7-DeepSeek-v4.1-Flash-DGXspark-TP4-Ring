@@ -79,6 +79,8 @@ NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
 NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-1}"
 NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 NCCL_HOST_DIR="${NCCL_HOST_DIR:-$HOME/nccl-2.30.7}"
+# 仅开发模式（SGLANG_CODE_MOUNTS=1）用：生产模式这四个挂载点全部来自镜像
+# （/opt/nccl-ringonly + /opt/libncclpin.so 由 build_optimized_image.sh 烘入）。
 NCCL_CONTAINER_DIR="${NCCL_CONTAINER_DIR:-/nccl}"
 
 MODEL_DIR="${MODEL_DIR:-$HOME/NewModels/DeepSeek-V4.1-Flash}"
@@ -100,7 +102,10 @@ EP_SIZE="${EP_SIZE:-$TP_SIZE}"
 DIST_PORT="${DIST_PORT:-20000}"
 PORT="${PORT:-8888}"
 OFFLOAD_MODE="${OFFLOAD_MODE:-nvme}"
-DSV41_CACHE_GIB="${DSV41_CACHE_GIB:-4}"
+# 默认取 1 而不是 4，与 .env.tp4 / .env.tp4.example / 镜像烘焙值（DSV41_CACHE_GIB=1）一致：
+# 这条是**已批准值**（R2 决策：缓存 1GiB 下命中率已 99.1%，而 4GiB 会把 900K 单 prompt 打成
+# 失败——地板 3.53→1.50GB）。留一个 4 的默认值等于给"不读台账的人"备了个相反的旋钮。
+DSV41_CACHE_GIB="${DSV41_CACHE_GIB:-1}"
 # Engram misses are serviced by a pool: the GB10 NVMe does ~3.5k IOPS at QD=1 and
 # ~112k at QD=64, and the callback blocks the compute stream the whole time.
 DSV41_IO_THREADS="${DSV41_IO_THREADS:-96}"
@@ -126,6 +131,19 @@ HEAD_MEM_FRACTION_STATIC="${HEAD_MEM_FRACTION_STATIC:-$MEM_FRACTION_STATIC}"
 MAX_RUNNING_REQUESTS="${MAX_RUNNING_REQUESTS:-4}"
 CHUNKED_PREFILL_SIZE="${CHUNKED_PREFILL_SIZE:-2048}"
 MAX_TOTAL_TOKENS="${MAX_TOTAL_TOKENS:-320000}"
+
+# --- S5 governance pin (2026-09-17) ---
+# The KV pool must cover MAX_RUNNING_REQUESTS x CONTEXT_LENGTH. If not, the
+# shortfall is silent (requests just retract more often). Fail closed instead.
+if [ -n "${MAX_RUNNING_REQUESTS:-}" ] && [ -n "${CONTEXT_LENGTH:-}" ] && [ -n "${MAX_TOTAL_TOKENS:-}" ]; then
+  _need=$(( MAX_RUNNING_REQUESTS * CONTEXT_LENGTH ))
+  if [ "$_need" -gt "$MAX_TOTAL_TOKENS" ]; then
+    echo "[start.sh] PIN-FAIL: MAX_TOTAL_TOKENS=$MAX_TOTAL_TOKENS < MAX_RUNNING_REQUESTS($MAX_RUNNING_REQUESTS) x CONTEXT_LENGTH($CONTEXT_LENGTH) = $_need" >&2
+    exit 1
+  fi
+  echo "[start.sh] pin-ok: pool $MAX_TOTAL_TOKENS >= concurrency need $_need"
+fi
+# --- end S5 pin ---
 SPEC_ALGO="${SPEC_ALGO:-DSPARK}"
 DSPARK_BLOCK_SIZE="${DSPARK_BLOCK_SIZE:-5}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-deepseek-v4.1-flash}"
@@ -248,6 +266,76 @@ gid_index_remote() {
   done"
 }
 
+# sglang source overlay: graft-style per-file bind mounts (no image layers).
+# Each present file in SGLANG_OVERLAY_DIR is mounted over its in-container
+# path; md5 discipline applies (scp the same file to every worker host).
+SGLANG_OVERLAY_DIR="${SGLANG_OVERLAY_DIR:-$HOME/dsv41-flash-dgxsparks/sglang-overlay}"
+declare -A SGLANG_OVERLAY_MAP=(
+  [decode_cuda_graph_runner.py]=python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py
+  # --- Lane D Wave 1 (2026-09-15, r9-ops): PR38409 + PR39370-sub1 + PR39138 ---
+  [main_norm_rope.cuh]=python/sglang/kernels/jit/csrc/deepseek_v4/main_norm_rope.cuh
+  [dspark_accept.py]=python/sglang/kernels/ops/speculative/dspark/dspark_accept.py
+  [dflash_info_v2.py]=python/sglang/srt/speculative/dflash_info_v2.py
+  [dspark_draft.py]=python/sglang/srt/speculative/dspark_components/dspark_draft.py
+  [fast_argmax.py]=python/sglang/kernels/ops/speculative/dspark/fast_argmax.py
+  [ops_embeddings__init__.py]=python/sglang/kernels/ops/embeddings/__init__.py
+  [engram_hash.py]=python/sglang/kernels/ops/embeddings/engram_hash.py
+  [engram.py]=python/sglang/srt/layers/engram.py
+  # --- CED opt1 (2026-09-15, r9-ops): skip late layers on non-final chunks ---
+  [schedule_batch.py]=python/sglang/srt/managers/schedule_batch.py
+  [forward_batch_info.py]=python/sglang/srt/model_executor/forward_batch_info.py
+  [deepseek_v4_backend.py]=python/sglang/srt/layers/attention/deepseek_v4_backend.py
+  [deepseek_v4_model.py]=python/sglang/srt/models/deepseek_v4.py
+  # --- Lane D Wave 2 (2026-09-15, r9-ops): PR39420 side-stream/graph single-stream ---
+  [deepseek_v2.py]=python/sglang/srt/models/deepseek_v2.py
+  [deepseek_v4_dspark.py]=python/sglang/srt/models/deepseek_v4_dspark.py
+  # --- Lane D Wave 3 (2026-09-15, r9-ops): PR39187 bounded dense indexer + PR38979 prefill reuse (env-gated OFF) ---
+  [server_args.py]=python/sglang/srt/server_args.py
+  [environ.py]=python/sglang/srt/environ.py
+  [dsv4_indexer.py]=python/sglang/srt/layers/attention/dsv4/indexer.py
+  [dsv4_prefill_reuse.py]=python/sglang/srt/layers/attention/dsv4/prefill_reuse.py
+  # --- FP4 main KV M0+M1 (2026-09-15, r9-ops): #39123 fork-v4-fp4 pool + repack bridge ---
+  [c1.cuh]=python/sglang/kernels/jit/csrc/deepseek_v4/c1.cuh
+  [c2.cuh]=python/sglang/kernels/jit/csrc/deepseek_v4/c2.cuh
+  [fused_norm_rope_v2.cuh]=python/sglang/kernels/jit/csrc/deepseek_v4/fused_norm_rope_v2.cuh
+  [store.cuh]=python/sglang/kernels/jit/csrc/deepseek_v4/store.cuh
+  [kv_layout.cuh]=python/sglang/kernels/jit/include/sgl_kernel/deepseek_v4/kv_layout.cuh
+  [attn.py]=python/sglang/kernels/ops/attention/dsv4/attn.py
+  [c1.py]=python/sglang/kernels/ops/attention/dsv4/c1.py
+  [c2.py]=python/sglang/kernels/ops/attention/dsv4/c2.py
+  [compress.py]=python/sglang/kernels/ops/attention/dsv4/compress.py
+  [dequant_k_cache.py]=python/sglang/kernels/ops/attention/dsv4/dequant_k_cache.py
+  [elementwise.py]=python/sglang/kernels/ops/attention/dsv4/elementwise.py
+  [kv_layout.py]=python/sglang/kernels/ops/attention/dsv4/kv_layout.py
+  [repack_fp4_to_v4.py]=python/sglang/kernels/ops/attention/dsv4/repack_fp4_to_v4.py
+  [overrides.py]=python/sglang/srt/arg_groups/overrides.py
+  [npu_dsv4_memory_pool.py]=python/sglang/srt/hardware_backend/npu/dsv4/dsv4_memory_pool.py
+  [compressor_v2.py]=python/sglang/srt/layers/attention/dsv4/compressor_v2.py
+  [torch_quant.py]=python/sglang/srt/layers/attention/dsv4/torch_quant.py
+  [deepseek_v4_memory_pool.py]=python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py
+  [dsv41_request_window.py]=python/sglang/srt/mem_cache/dsv41_request_window.py
+  [hybrid_pool_assembler.py]=python/sglang/srt/mem_cache/hybrid_cache/hybrid_pool_assembler.py
+  [kv_cache_configurator.py]=python/sglang/srt/mem_cache/kv_cache_configurator.py
+  [pool_configurator.py]=python/sglang/srt/model_executor/pool_configurator.py
+)
+# 代码来源（2026-09-16 起）：镜像内 vs 宿主逐文件 bind-mount。
+#   0（默认，生产）＝ overlay 与 adapter/b12x/NCCL shim 都在镜像里 ⇒ 容器只剩**数据挂载**。
+#     好处是结构清楚，且"改了盘上、容器仍看旧 inode"这一类漂移**从结构上消失**
+#     （overlay-drift-check 报 drift=0 成为常态而不是例外）。
+#   1（开发）＝ 逐文件覆盖，改完重启即可，不必重建镜像。代价：必须重建容器才看得到新字节
+#     （逐文件 bind-mount 钉住 inode），且这类失效**任何缓存检查都看不出来**。
+SGLANG_CODE_MOUNTS="${SGLANG_CODE_MOUNTS:-0}"
+sglang_overlay_mounts() {   # $1 = nameref array to append -v args to
+  local -n _o=$1
+  local f
+  [[ "$SGLANG_CODE_MOUNTS" = 1 ]] || return 0
+  for f in "${!SGLANG_OVERLAY_MAP[@]}"; do
+    if [[ -f "$SGLANG_OVERLAY_DIR/$f" ]]; then
+      _o+=( -v "$SGLANG_OVERLAY_DIR/$f:/sgl-workspace/sglang/${SGLANG_OVERLAY_MAP[$f]}:ro" )
+    fi
+  done
+}
+
 docker_common_args() {
   local -n _a=$1
   local src hip gid
@@ -255,14 +343,58 @@ docker_common_args() {
   hip="$2"
   gid="$3"
   [[ -d "$src" ]] || die "model mount src missing: $src"
+  # 开发模式才挂逐文件覆盖（生产用镜像内的代码，见 SGLANG_CODE_MOUNTS 说明）
+  local -a code_mounts=()
+  if [[ "$SGLANG_CODE_MOUNTS" = 1 ]]; then
+    sglang_overlay_mounts code_mounts
+    local _pair _src_dev _tgt_dev
+    for _pair in "$HOME/dsv41-flash-dgxsparks/adapter /opt/dsv41/adapter" \
+                 "$HOME/dsv41-flash-dgxsparks/b12x-site /opt/b12x"; do
+      _src_dev="${_pair%% *}"; _tgt_dev="${_pair#* }"
+      if [[ -d "$_src_dev" ]]; then
+        code_mounts+=(-v "$_src_dev:$_tgt_dev:ro")
+      else
+        # 源不在就**不要挂**：docker 会替你造一个空目录盖住镜像里烘好的那份
+        # （/opt/dsv41/adapter 是 PYTHONPATH 首段、/opt/b12x 是 MoE 取件），
+        # 于是"开发模式"悄悄把生产资产换成空壳，而容器里看不出原因。
+        warn "开发模式：$_src_dev 不存在 → 不挂它（容器用镜像内的 $_tgt_dev）"
+      fi
+    done
+  fi
+  # 同一条开关管 JIT 缓存：开发挂宿主 ~/.cache，生产用镜像里烘的那份。
+  local -a cache_mounts=()
+  [[ "$SGLANG_CODE_MOUNTS" = 1 ]] && cache_mounts=(-v "$HOME/.cache:/root/.cache")
   _a+=(
     --network host --ipc host --privileged --cap-add IPC_LOCK --gpus all
-    --shm-size "${SHM_SIZE:-32g}"
+    # 无 --shm-size：--ipc host 之下 /dev/shm 就是宿主的（实测容器内 df=61G），
+    # docker 会忽略 --shm-size（旧值 32g 从未生效）。若将来去掉 --ipc host，
+    # 必须显式补上 --shm-size，否则会退回 docker 默认的 64MB —— NCCL/torch 会失败。
+    # --memory 保持 24g（2026-09-16 实测复核，**不要**顺手抬高）：
+    #   稳态 memory.current 8.60GiB（36% 上限，anon 6.74GiB）；四机 memory.peak 全部
+    #   顶在上限（head 超 1 页、三 worker 精确相等），memory.events 的 max 计数
+    #   2.7-3.0 万次 —— 但 oom_kill **四机全 0**。能一直顶在上限而不被杀，说明被压住的
+    #   是**可回收页缓存**（加载期 476GB 检查点的 read() 路径，pgsteal 累计 721GiB），
+    #   不是 anon（anon 峰值 11GiB，距上限还有 13GiB）。⇒ 这道上限的实际职能是
+    #   **给加载期的页缓存上闸**：宿主 MemFree 只有 1.16GiB，而 GPU 的 ~99GiB
+    #   统一内存分配正是从这个池子里拿 —— 抬高上限等于让页缓存去抢 GPU 的口粮。
+    # --memory-swap 与 memory 取同值 = 禁 swap（有意）：GB10 是统一内存，换出会把
+    # 权重/Engram 通路拖进 swap 抖动，宁可让它硬失败。
+    --memory "${CTN_MEMORY:-24g}" --memory-swap "${CTN_MEMORY:-24g}"
     --ulimit "memlock=-1:-1" --ulimit stack=67108864
     --device /dev/infiniband:/dev/infiniband
-    -v "$src:/models/DeepSeek-V4.1-Flash"
+    -v "$src:/models/DeepSeek-V4.1-Flash:ro"
     -v "$STATE_DIR:/state"
-    -v "$HOME/.cache:/root/.cache"
+    # JIT 缓存：生产用**镜像里烘的那份**（/root/.cache，构建时由 build_optimized_image.sh
+    # 的 2b 步对着同一份 overlay 树刷新过），容器只往自己的可写层写新产物。
+    # 过去无条件挂宿主 ~/.cache，会把 544MB 里的 pip(428M)/uv(38M)/fontconfig/ibus/
+    # tracker3 等桌面缓存一起塞进生产容器，并且容器以 root 往里写 ⇒ 宿主属主读不了
+    # （实测 ~/.cache/sglang/nv EACCES）。开发模式才挂（改完即生效，见 SGLANG_CODE_MOUNTS）。
+    # 回退旋钮：若首启出现大面积 JIT 重编（`docker diff` 里 .cache 新增以万计），
+    # 就把这里换成按需挂三个子目录（sglang/b12x/flashinfer），理由与验法见
+    # V41-SGLANG-SESSION-DOSSIER §6。
+    "${cache_mounts[@]}"
+    "${code_mounts[@]}"
+    -e "PYTHONPATH=/opt/dsv41/adapter:/opt/b12x"
     -e "OFFLOAD_MODE=$OFFLOAD_MODE"
     -e "DSV41_CACHE_GIB=$DSV41_CACHE_GIB"
     -e "DSV41_IO_THREADS=$DSV41_IO_THREADS"
@@ -327,18 +459,24 @@ docker_common_args() {
   if [[ -n "${EXTRA_SGLANG_ARGS:-}" ]]; then
     _a+=(-e "EXTRA_SGLANG_ARGS=$EXTRA_SGLANG_ARGS")
   fi
-  if [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ]]; then
-    _a+=(-v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro" -e "LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR")
+  # Ring 适配：定制 RING-only NCCL 2.30.7 + 核绑定 shim（与 vLLM 生产栈同一对 LD_PRELOAD）。
+  # 这两个库**已烘进镜像**（/opt/nccl-ringonly、/opt/libncclpin.so），所以生产模式不再挂载；
+  # 但 env 仍由启动器显式给 —— 镜像刻意**不烘 LD_PRELOAD**：libncclpin.so 会全局拦截
+  # pthread_create/pthread_setname_np（按线程名只钉 NCCL 线程），写进镜像 ENV 就等于让它对
+  # 每个 `docker exec` 的调试工具也生效。临时关掉用 NCCLPIN_DISABLE=1。
+  if [[ "$SGLANG_CODE_MOUNTS" = 1 ]]; then
+    if [[ -f "$NCCL_HOST_DIR/libnccl.so.2.30.7" || -f "$NCCL_HOST_DIR/libnccl.so.2" ]]; then
+      _a+=(-v "$NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro")
+    fi
+    if [[ -f /opt/aicad-prod/lib/libncclpin.so && -d /opt/nccl-ringonly ]]; then
+      mkdir -p "$HOME/nccl-debug"
+      _a+=(-v "/opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro"
+           -v "/opt/nccl-ringonly:/opt/nccl-ringonly:ro"
+           -v "$HOME/nccl-debug:/nccl-debug:rw")
+    fi
   fi
-  # Ring adaptation: host ring-only NCCL + core-pinning shim (same LD_PRELOAD
-  # pair as the vLLM production stack), and the NCCL debug-log取证 mount.
-  if [[ -f /opt/aicad-prod/lib/libncclpin.so && -d /opt/nccl-ringonly ]]; then
-    mkdir -p "$HOME/nccl-debug"
-    _a+=(-v "/opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro"
-         -v "/opt/nccl-ringonly:/opt/nccl-ringonly:ro"
-         -v "$HOME/nccl-debug:/nccl-debug:rw"
-         -e 'LD_PRELOAD=/opt/libncclpin.so /opt/nccl-ringonly/libnccl.so.2')
-  fi
+  _a+=(-e "LD_LIBRARY_PATH=/opt/nccl-ringonly"
+       -e 'LD_PRELOAD=/opt/libncclpin.so /opt/nccl-ringonly/libnccl.so.2')
   # Ring adaptation: per-rank PEER_HCA for rank 0 (workers get theirs in
   # worker_env_lines via PEER_HCA_RANK<n>).
   if [[ -n "${PEER_HCA_RANK0:-}" ]]; then
@@ -619,8 +757,90 @@ _busy_gpu() {
   nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -q '[0-9]'
 }
 
+# --- 生产模式镜像守卫 --------------------------------------------------------
+# SGLANG_CODE_MOUNTS=0 时，代码/资产**只来自镜像**（没有 bind-mount 兜底）。三类失效都无声：
+#   ① 本机缺镜像 → 旧代码会**自动 build**：那是本地现造的另一份东西，四机里只要有一台缺，
+#     栈照样起来，但四机跑的不是同一份代码/资产；
+#   ② 镜像里没烘那几项资产 → 容器照起，静默丢 ring-only NCCL / b12x / 入口，性能与行为一起变；
+#   ③ 四机 image ID 不同 → "四机同栈"只是名义上的（同一个 tag 指向不同内容）。
+# 所以这三条放在启动路径上硬断言，且生产模式**不自动 build**。
+PROD_IMAGE_ASSETS="/opt/dsv41/boot.py /opt/dsv41/adapter/librow_store.so /opt/b12x \
+/opt/nccl-ringonly/libnccl.so.2 /opt/libncclpin.so \
+/sgl-workspace/sglang/python/sglang/kernels/jit/include/sgl_kernel/deepseek_v4/kv_layout.cuh"
+
+# 镜像的**内容身份**：RootFS 层清单（diffID 序列）的哈希。
+# ★为什么不能用 `docker image inspect -f '{{.Id}}'`：本集群两种镜像存储并存 ——
+#   dgxspark01 是 containerd 的 overlayfs 快照器（Driver=overlayfs），02-04 是经典
+#   overlay2；同一份内容在两边报出的 .Id 不同（实测 03587ce92d08… vs 9e1036bc6a10…），
+#   而**层清单完全相同**（123 层，哈希 38bbe8265458…）。拿 .Id 当身份 = 让 serve
+#   永远被自己拦住，而且拦得莫名其妙。
+IMGID_TPL='{{join .RootFS.Layers " "}}'
+img_content_id() { docker image inspect -f "$IMGID_TPL" "$1" 2>/dev/null | sha256sum | cut -c1-16; }
+
+image_preflight() {
+  local h want_id got_id got_files want_files missing
+  docker image inspect "$IMAGE" >/dev/null 2>&1 \
+    || die "本机缺镜像 $IMAGE。生产模式不自动 build（那会造出另一份镜像）；请先 build+分发，或临时 SGLANG_CODE_MOUNTS=1 走宿主代码"
+  if [[ "$SGLANG_CODE_MOUNTS" = 1 ]]; then
+    warn "代码来源=宿主逐文件 bind-mount（开发模式）：只查镜像在场，跳过自足性/四机一致性断言"
+    for h in "${WORKER_HOSTS[@]}"; do
+      remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") >/dev/null 2>&1" \
+        || die "$h 上没有 $IMAGE（开发模式也需要它——逐文件挂载只覆盖代码，容器本体仍来自镜像）"
+    done
+    return 0
+  fi
+  # ② 自足性：这些路径缺任一个，容器仍能起，但会静默降级
+  local probe_rc=0
+  missing=$(docker run --rm --network none --entrypoint sh "$IMAGE" -c '
+    m=""
+    for p in '"$PROD_IMAGE_ASSETS"'; do [ -e "$p" ] || m="$m $p"; done
+    printf "%s" "$m"' 2>/dev/null) || probe_rc=$?
+  # ★探针自身跑不起来 ≠ 镜像自足。旧版把 `docker run` 的失败（例如 rc=125）也当成
+  #   "missing 为空 ⇒ 通过"，于是这条闸门在最需要它的时候（镜像根本起不来）静默放行
+  #   （2026-09-17 交叉审核实测）。
+  [[ "$probe_rc" = 0 ]] || die "自足性探针自身失败（docker run rc=$probe_rc）⇒ **无法证明镜像自足**，按失败处理。
+     先手工核对：docker run --rm --network none --entrypoint sh $IMAGE -c 'ls -d $PROD_IMAGE_ASSETS'"
+  [[ -z "$missing" ]] || die "镜像 $IMAGE **不自足**，缺：$missing
+   生产模式不会 bind-mount 它们 ⇒ 会静默丢 ring-only NCCL/b12x/入口/kv_layout 头。重建镜像再上线"
+  # ③ 四机同一份（按内容身份比，见 img_content_id 的说明）
+  want_id=$(img_content_id "$IMAGE")
+  [[ -n "$want_id" ]] || die "取不到本机镜像的内容身份（$IMAGE）"
+  got_files=$(docker image inspect -f '{{index .Config.Labels "org.dsv41.overlay_files"}}' "$IMAGE" 2>/dev/null || true)
+  want_files="${#SGLANG_OVERLAY_MAP[@]}"
+  [[ "$got_files" = "$want_files" ]] \
+    || warn "镜像标注 overlay_files=${got_files:-无} 而本机 start.sh 映射为 $want_files 条 ⇒ 镜像不是按当前映射烘的（内容可能旧），核对后再上线"
+  info "镜像 $IMAGE  内容身份=$(printf '%s' "$want_id")…  overlay_files=${got_files:-?}  map_md5=$(docker image inspect -f '{{index .Config.Labels "org.dsv41.overlay_map_md5"}}' "$IMAGE" 2>/dev/null || echo '?')"
+  for h in "${WORKER_HOSTS[@]}"; do
+    # ★必须先确认"镜像在不在"，再算内容身份：空输入的 sha256sum 恒为 e3b0c44298fc1c14（**非空**），
+    #   旧写法因此永远走不到"这台没有该镜像"分支，把"缺镜像"误诊成"四机内容不一致"
+    #   （方向仍是 fail-closed，但报错把人引向错误的排查路径 —— 2026-09-17 交叉审核实测）。
+    # ⚠ 用两次调用，**不要**把 `if…then…fi` 塞进一条远端命令：远端命令经 python 助手传参，
+    #   复合语句在那里不可靠（实测：同一条命令直接 ssh 跑得出 4ebef21b…，经助手却返回空 ⇒
+    #   假报"没有该镜像"并拦住起栈）。存在性判定复用 dev 分支已在用的 `remote_ok_on`。
+    if remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") >/dev/null 2>&1"; then
+      got_id=$(remote_on "$h" "docker image inspect -f '$IMGID_TPL' $(printf '%q' "$IMAGE") 2>/dev/null | sha256sum | cut -c1-16" 2>/dev/null | tr -d '\r' | tail -1)
+    else
+      got_id=""
+    fi
+    [[ -n "$got_id" ]] || die "$h 上没有 $IMAGE —— 生产模式不自动 build。先在四机就位同一份（docker save | ssh … docker load），或临时 SGLANG_CODE_MOUNTS=1"
+    [[ "$got_id" = "$want_id" ]] \
+      || die "四机镜像内容不一致：$h=$got_id vs 本机=$want_id —— 同一个 tag 指向不同内容，先统一再起栈"
+    info "  $h 同一份内容（$got_id）"
+  done
+}
+
 cmd_serve() {
   DOCTOR_STRICT=0 cmd_doctor || true
+  # Pre-start guard check, before any container is created. Motivated by the
+  # 2026-09-15 incident: a window went ahead with no oom_gate monitor on any node,
+  # so the prefill transient of the raised KV pin had nothing to catch it and the
+  # host OOM-killed the scheduler. That failure is silent -- a missing guard raises
+  # no error -- so it belongs on the start path, not in memory. The hook is
+  # read-only and returns 0 unconditionally, so it can never block a launch;
+  # GUARD_ONSTART=0 skips it.
+  if [[ -f "$HOME/w6-kit/guard/guard-onstart.sh" && "${GUARD_ONSTART:-1}" == "1" ]]; then
+    bash "$HOME/w6-kit/guard/guard-onstart.sh" || true
+  fi
   [[ -f "$MODEL_DIR/config.json" ]] || cmd_download
   ln -sfn "$MODEL_DIR" "$COMMON_MODEL"
 
@@ -628,16 +848,24 @@ cmd_serve() {
     die "GPU is busy (glm53-exl3 or similar). Stop the other stack, or FORCE=1 ./start.sh serve"
   fi
 
-  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  # 开发模式且本机缺镜像时才允许自动 build（生产模式绝不：见 image_preflight 的说明）。
+  if [[ "$SGLANG_CODE_MOUNTS" = 1 ]] && ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    warn "开发模式：本机缺镜像 $IMAGE → 自动 build"
     cmd_build
   fi
+  # 存在性 + 自足性 + 四机同一份（生产模式三条硬断言）
+  image_preflight
 
   local h need_share=0
   if [[ "$WEIGHTS_MODE" == "local" ]]; then
     info "WEIGHTS_MODE=local — workers read node-local weights, NFS skipped"
-    for h in "${WORKER_HOSTS[@]}"; do
-      remote_ok_on "$h" "test -f $WORKER_MODEL_DIR/config.json" \
-        || die "missing local weights on $h: $WORKER_MODEL_DIR"
+    local _wi _wm _ov
+    for _wi in "${!WORKER_HOSTS[@]}"; do
+      _wm="${WORKER_MODEL_DIR:-}"
+      _ov="WORKER_MODEL_DIR_$((_wi + 1))"
+      [ -n "${!_ov:-}" ] && _wm="${!_ov}"
+      remote_ok_on "${WORKER_HOSTS[$_wi]}" "test -f $_wm/config.json" \
+        || die "missing local weights on ${WORKER_HOSTS[$_wi]}: $_wm"
     done
   else
     for h in "${WORKER_HOSTS[@]}"; do
@@ -646,13 +874,8 @@ cmd_serve() {
       fi
     done
   fi
-  for h in "${WORKER_HOSTS[@]}"; do
-    if ! remote_ok_on "$h" "docker image inspect $(printf '%q' "$IMAGE") >/dev/null 2>&1"; then
-      info "image missing on $h — building"
-      cmd_build
-      break
-    fi
-  done
+  # 原先这里是"哪台缺镜像就在本机 build 一遍"——本机 build 修不了 worker 的缺失，
+  # 只会把同一个 tag 在不同节点指向不同内容。现在统一由 image_preflight 断言四机同一份。
   if [[ "$WEIGHTS_MODE" != "local" && ( "$need_share" -eq 1 || "$NFS_SHARE" == "1" ) ]]; then
     cmd_share
   fi
@@ -691,39 +914,80 @@ cmd_serve() {
 
   push_spec_tables
   info "Starting workers (ranks 1..${#WORKER_IPS[@]}) first..."
-  local idx=0 wip wgid rank
+  local idx=0 wip wgid rank wmodel wextra _ov _ev
   for h in "${WORKER_HOSTS[@]}"; do
     wip="${WORKER_IPS[$idx]}"
     wgid="${WORKER_GIDS[$idx]}"
     rank=$((idx + 1))
+    # Cluster adaptation (2026-09-14, our fleet): workers may have per-rank
+    # model dirs (02 holds full local weights; 03/04 read 46 shards over NFS)
+    # and per-rank extra file binds (03/04 pin the two Engram shards to the
+    # LOCAL files so the row-store never reads Engram over the network).
+    # WORKER_MODEL_DIR_<rank> / WORKER_EXTRA_MOUNTS_<rank> override the
+    # single-value defaults from the env file.
+    wmodel="${WORKER_MODEL_DIR:-}"
+    _ov="WORKER_MODEL_DIR_${rank}"
+    [ -n "${!_ov:-}" ] && wmodel="${!_ov}"
+    wextra="${WORKER_EXTRA_MOUNTS:-}"
+    _ev="WORKER_EXTRA_MOUNTS_${rank}"
+    [ -n "${!_ev:-}" ] && wextra="${!_ev}"
+    # Prebuild overlay pairs locally (map keys/values only; no remote $vars).
+    wov=""
+    for _f in "${!SGLANG_OVERLAY_MAP[@]}"; do
+      wov+=" $_f:${SGLANG_OVERLAY_MAP[$_f]}"
+    done
     remote_on "$h" "
       set -e
       if [ '$WEIGHTS_MODE' != 'local' ]; then
         docker volume inspect $NFS_VOLUME >/dev/null || { echo 'MISSING docker volume $NFS_VOLUME on $h — run ./start.sh share'; exit 1; }
       fi
       test -d /dev/infiniband || { echo 'MISSING /dev/infiniband on $h'; exit 1; }
-      mkdir -p $WORKER_DIR/state $WORKER_DIR/logs
+      mkdir -p $WORKER_DIR/state $WORKER_DIR/logs $WORKER_DIR/engram
+      # 生产（代码在镜像里）：NCCL 库/shim 与 overlay 都已在镜像内 ⇒ 全部不挂载，
+      # 容器只剩数据挂载。env 仍显式给（镜像刻意不烘 LD_PRELOAD）。
       NCCL_VOL=''
-      NCCL_ENV=''
-      if [ -f $NCCL_HOST_DIR/libnccl.so.2.30.7 ] || [ -f $NCCL_HOST_DIR/libnccl.so.2 ]; then
-        NCCL_VOL=\"-v $NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro\"
-        NCCL_ENV='-e LD_LIBRARY_PATH=$NCCL_CONTAINER_DIR'
+      NCCL_ENV='-e LD_LIBRARY_PATH=/opt/nccl-ringonly'
+      if [ '${SGLANG_CODE_MOUNTS}' = 1 ]; then
+        if [ -f $NCCL_HOST_DIR/libnccl.so.2.30.7 ] || [ -f $NCCL_HOST_DIR/libnccl.so.2 ]; then
+          NCCL_VOL=\"-v $NCCL_HOST_DIR:$NCCL_CONTAINER_DIR:ro\"
+        fi
       fi
       SHIM_VOL=''
-      if [ -f /opt/aicad-prod/lib/libncclpin.so ] && [ -d /opt/nccl-ringonly ]; then
+      if [ '${SGLANG_CODE_MOUNTS}' = 1 ] && [ -f /opt/aicad-prod/lib/libncclpin.so ] && [ -d /opt/nccl-ringonly ]; then
         mkdir -p \$HOME/nccl-debug
         SHIM_VOL=\"-v /opt/aicad-prod/lib/libncclpin.so:/opt/libncclpin.so:ro -v /opt/nccl-ringonly:/opt/nccl-ringonly:ro -v \$HOME/nccl-debug:/nccl-debug:rw\"
       fi
+      CODE_VOL=''
+      if [ '${SGLANG_CODE_MOUNTS}' = 1 ]; then
+        CODE_VOL=\"-v \$HOME/dsv41-flash-dgxsparks/adapter:/opt/dsv41/adapter:ro -v \$HOME/dsv41-flash-dgxsparks/b12x-site:/opt/b12x:ro\"
+      fi
+      CACHE_VOL=''
+      if [ '${SGLANG_CODE_MOUNTS}' = 1 ]; then
+        CACHE_VOL=\"-v \$HOME/.cache:/root/.cache\"
+      fi
       MODEL_SRC='$NFS_VOLUME'
-      if [ '$WEIGHTS_MODE' = 'local' ]; then MODEL_SRC='$WORKER_MODEL_DIR'; fi
+      if [ '$WEIGHTS_MODE' = 'local' ]; then MODEL_SRC='$wmodel'; fi
+      WEXTRA='$wextra'
+      OVERLAY_VOL=''
+      if [ '${SGLANG_CODE_MOUNTS}' = 1 ]; then
+        for wpair in $wov; do
+          wf=\${wpair%%:*}; wrel=\${wpair#*:}
+          if [ -f \$HOME/dsv41-flash-dgxsparks/sglang-overlay/\$wf ]; then
+            OVERLAY_VOL=\"\$OVERLAY_VOL -v \$HOME/dsv41-flash-dgxsparks/sglang-overlay/\$wf:/sgl-workspace/sglang/\$wrel:ro\"
+          fi
+        done
+      fi
       docker run -d --name $WORKER_CTN \
         --network host --ipc host --privileged --cap-add IPC_LOCK --gpus all \
-        --shm-size ${SHM_SIZE:-32g} \
+        --memory ${CTN_MEMORY:-24g} --memory-swap ${CTN_MEMORY:-24g} \
         --ulimit memlock=-1:-1 --ulimit stack=67108864 \
         --device /dev/infiniband:/dev/infiniband \
+        \$OVERLAY_VOL \$CODE_VOL \
+        -e PYTHONPATH=/opt/dsv41/adapter:/opt/b12x \
         -v \$MODEL_SRC:/models/DeepSeek-V4.1-Flash:ro \
+        \$WEXTRA \
         -v $WORKER_DIR/state:/state \
-        -v \$HOME/.cache:/root/.cache \
+        \$CACHE_VOL \
         \$NCCL_VOL \$NCCL_ENV \$SHIM_VOL \\
 $(worker_env_lines "$wip" "$wgid" "$rank")
         -e API_KEY=$(printf '%q' "$API_KEY") \\
@@ -935,13 +1199,20 @@ cmd_pack() {
     # mount silently resolves to a non-existent path and pack writes nothing,
     # leaving the worker on the 2-read unpacked path.
     if [[ "$WEIGHTS_MODE" == "local" ]]; then
-      wsrc="$WORKER_MODEL_DIR"
+      _ov="WORKER_MODEL_DIR_${idx}"
+      wsrc="${!_ov:-$WORKER_MODEL_DIR}"
     else
       wsrc="$NFS_VOLUME"
     fi
+    # Same per-rank Engram local-file binds as serve: on 03/04 the model view
+    # is the NFS one, and pack must read the Engram tables from the LOCAL
+    # shard files (Engram never crosses the network).
+    _ev="WORKER_EXTRA_MOUNTS_${idx}"
+    wpack_extra="${!_ev:-}"
     remote_on "$host" "test -f $wsrc/config.json || { echo 'MISSING checkpoint on $host: $wsrc'; exit 1; }
       mkdir -p $WORKER_ENGRAM_DIR && docker run --rm --network host \
       -v $wsrc:/models/DeepSeek-V4.1-Flash:ro \
+      $wpack_extra \
       -v $WORKER_ENGRAM_DIR:/engram \
       -e DSV41_SOURCE=/models/DeepSeek-V4.1-Flash \
       --entrypoint python3 $IMAGE \

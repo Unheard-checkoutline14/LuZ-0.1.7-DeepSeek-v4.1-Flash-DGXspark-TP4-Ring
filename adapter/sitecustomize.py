@@ -31,6 +31,16 @@ class EngramLoader(importlib.abc.Loader):
         elif module.__name__ == 'sglang.srt.model_executor.model_runner':
             from prefill_empty_cache import install
             install(module)
+        elif module.__name__ == (
+            'sglang.srt.layers.quantization.mxfp4_flashinfer_cutlass_moe'
+        ):
+            from moe_b12x import install_scale_snapshot
+            install_scale_snapshot(module)
+        elif module.__name__ == (
+            'sglang.srt.layers.moe.moe_runner.flashinfer_cutlass'
+        ):
+            from moe_b12x import install
+            install(module)
         else:
             # V4.1 ratio-1/2 indexers always call the FP4 DeepGEMM kernel.
             # SM120 needs its split-128 planner even when the legacy FP8
@@ -51,7 +61,11 @@ class EngramFinder(importlib.abc.MetaPathFinder):
                             'sglang.srt.layers.quantization.fp8_utils',
                             'sglang.srt.layers.quantization.fp8',
                             'sglang.srt.model_executor.model_runner',
-                            'sglang.srt.layers.attention.dsv4.metadata'):
+                            'sglang.srt.layers.attention.dsv4.metadata',
+                            'sglang.srt.layers.quantization.'
+                            'mxfp4_flashinfer_cutlass_moe',
+                            'sglang.srt.layers.moe.moe_runner.'
+                            'flashinfer_cutlass'):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
         if spec is not None:

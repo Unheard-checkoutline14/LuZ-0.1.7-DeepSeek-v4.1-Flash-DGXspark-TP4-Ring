@@ -18,7 +18,7 @@ import urllib.request
 BASE = "http://127.0.0.1:8003"  # 网关 (worker <MGMT_OCTET>), 可通过 --base 覆盖
 MODEL = "deepseek-v4.1-flash"
 API_KEY = "YOUR_API_KEY"
-DATA = "/home/spark/data/gsm8k_test.jsonl"
+DATA = "<USER>/data/gsm8k_test.jsonl"
 OUT_RAW = "/home/spark/dsv41-4x-spark/bench-results/gsm8k-dsv41.raw.jsonl"
 OUT_SUMMARY = "/home/spark/dsv41-4x-spark/bench-results/gsm8k-dsv41.summary.json"
 MAX_TOKENS = 1024

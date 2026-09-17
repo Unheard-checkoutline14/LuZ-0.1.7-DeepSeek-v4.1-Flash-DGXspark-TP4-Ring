@@ -1,7 +1,10 @@
 """Pinned checkpoint download, integrity verification, serving and API acceptance.
 
 Spark remap of 0xSero/deepseek-v4.1-flash-4x-rtx-pro-6000:
-  4x RTX PRO 6000 TP4/EP4  ->  3x DGX Spark (GB10) TP3/EP3 over NCCL.
+  4x RTX PRO 6000 TP4/EP4  ->  4x DGX Spark (GB10) TP4/EP2 over NCCL.
+Parallelism comes from the .env file (NNODES/TP_SIZE/EP_SIZE); the fleet's
+production shape is the 4-node line above (the earlier 3-node TP3/EP3 boot is
+retired history, not a supported configuration).
 Engram tables stay on NVMe (or SSHFS) via the row-store adapter. Do not use
 RAM mode on Spark: host RAM is the GPU's unified memory.
 """
