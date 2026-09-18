@@ -26,9 +26,13 @@ Measured on 2026-09-18: the head reports `03587ce9…` and the workers report
 `9e1036bc…`, yet on all four nodes the rootfs layer list, the `Config` section, the
 creation timestamp and every `org.dsv41.*` label are **byte-hash-identical**
 (`.Config` → `77799e6ce3de5824`, `.RootFS` → `cdd980943dfe9e6b`, `.Created` →
-`0203e92cacf2a896` on all four). The ID difference is a **re-serialisation artifact of
-`docker save` / `docker load`** (the config document is re-emitted on load), not a
-content difference. Verify content, not IDs.
+`0203e92cacf2a896` on all four).
+
+The mechanism is a **storage-driver split, not a content difference**: the head runs
+the containerd `overlayfs` snapshotter while the workers run classic `overlay2`, and
+the two backends report a different `.Id` for the same loaded content (this is also
+recorded in `start.sh:772-776`, which is the same warning stated for the preflight).
+Verify content, not IDs.
 
 > ⚠️ **Do not use layer count or image ID as an acceptance criterion.** This fleet has
 > previously carried two structural forms of the same content, and a distinct
@@ -254,7 +258,7 @@ docker load -i LuZ-0.1.7-DSV41F-image.tar.zst   # requires zstd; restores dsv41-
 ```bash
 # 1. content identity — the single fleet-wide acceptance value.
 #    Assert presence FIRST: a missing image yields 01ba4719c80b6fe9, not an error.
-for h in dgxspark01 dgxspark02 dgxspark03 dgxspark04; do
+for h in node01 node02 node03 node04; do   # your node aliases: head + 3 workers
   echo "--- $h"
   ssh "$h" 'docker image inspect dsv41-sglang-optimized:v7 >/dev/null 2>&1 || { echo "  ABSENT"; exit 0; }
             printf "  id     %s\n" "$(docker image inspect -f "{{join .RootFS.Layers \" \"}}" dsv41-sglang-optimized:v7 | sha256sum | cut -c1-16)"
@@ -263,7 +267,7 @@ done
 # expect, per node: id 4ebef21b6aedbd70 / layers 123
 
 # 2. content fingerprints — run on every node and compare the three md5s
-for h in dgxspark01 dgxspark02 dgxspark03 dgxspark04; do
+for h in node01 node02 node03 node04; do   # your node aliases: head + 3 workers
   ssh "$h" docker run --rm --entrypoint sh dsv41-sglang-optimized:v7 -c \
     'md5sum /opt/dsv41/boot.py /opt/dsv41/adapter/librow_store.so \
             /sgl-workspace/sglang/python/sglang/kernels/ops/attention/flash_mla_sm120.py'

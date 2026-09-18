@@ -770,10 +770,15 @@ PROD_IMAGE_ASSETS="/opt/dsv41/boot.py /opt/dsv41/adapter/librow_store.so /opt/b1
 
 # 镜像的**内容身份**：RootFS 层清单（diffID 序列）的哈希。
 # ★为什么不能用 `docker image inspect -f '{{.Id}}'`：本集群两种镜像存储并存 ——
-#   dgxspark01 是 containerd 的 overlayfs 快照器（Driver=overlayfs），02-04 是经典
+#   head（rank 0）是 containerd 的 overlayfs 快照器（Driver=overlayfs），02-04 是经典
 #   overlay2；同一份内容在两边报出的 .Id 不同（实测 03587ce92d08… vs 9e1036bc6a10…），
-#   而**层清单完全相同**（123 层，哈希 38bbe8265458…）。拿 .Id 当身份 = 让 serve
-#   永远被自己拦住，而且拦得莫名其妙。
+#   而**层清单完全相同**（123 层；内容身份由下方 IMGID_TPL 定义 ⇒ 4ebef21b6aedbd70）。
+#   拿 .Id 当身份 = 让 serve 永远被自己拦住，而且拦得莫名其妙。
+#   2026-09-18 四机实测佐证：.Config=77799e6ce3de5824、.RootFS=cdd980943dfe9e6b、
+#   .Created=0203e92cacf2a896、org.dsv41.* 标签 —— 逐字段哈希四机全等，只有 .Id 不同。
+# ⚠ 本注释旧版把层清单哈希写成 38bbe8265458…，那是**另一种取行口径**的产物
+#   （docker inspect 全 JSON → 逐行 print → sha256sum），与 IMGID_TPL 的
+#   4ebef21b6aedbd70 不是同一个量。身份哈希必须连**字节精确的管道**一起引用。
 IMGID_TPL='{{join .RootFS.Layers " "}}'
 img_content_id() { docker image inspect -f "$IMGID_TPL" "$1" 2>/dev/null | sha256sum | cut -c1-16; }
 
