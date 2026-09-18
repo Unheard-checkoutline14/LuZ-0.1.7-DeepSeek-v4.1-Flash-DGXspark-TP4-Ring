@@ -77,6 +77,91 @@ Tried and reverted: `--enable-deepseek-v4-fp4-indexer` costs ~11 % on 500K cold
 prefill and 6.4 GB of unified memory for no c12 gain. Single regression kept:
 c6 260 → 236 (an EP2 side effect; c8/c12 rise far more).
 
+## Experimental operator optimization (what we changed, and the risks)
+
+The production build carries **three experimental layers** on top of upstream SGLang
+(commit `e087e662b`). All are env-gated or file-level grafts; upstream behavior is
+one flag away. They are the main source of this build's measured gains
+(c12 aggregate +47%, decode peak +12%, prefill 100K +4-10% — full data in
+[docs/4DGX-dsv41-基准测试-横向对比-20260912.md](docs/4DGX-dsv41-基准测试-横向对比-20260912.md)
+and [docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)),
+and the main source of its upgrade risk. Read this section before pinning a new
+upstream commit.
+
+### Layer 1 — b12x CuTe kernels (fork of the b12x project, shipped in `b12x-site/`)
+
+b12x is a consumer-Blackwell (SM120/SM121) CuTe-DSL kernel library: NVFP4/MXFP4/MXFP8
+GEMM, fused MoE, paged/dense/sparse MLA attention, DSA indexing, mHC residual, PCIe
+collectives. This repo vendors it under `b12x-site/` and routes selected SGLang ops
+onto it:
+
+- **MoE W4A16→b12x** (`adapter/moe_b12x.py`, gate `DSV41_MOE_B12X=1`): routes
+  `flashinfer_mxfp4` MoE to b12x `fused_moe` under the replicated-input EP contract.
+  Bake-off (real layer-2 weights): b12x ahead at every M (M=6 −11.4% latency … M=2048 −5.2%).
+- **Dense MXFP8 linears→FlashInfer b12x backend** (`adapter/mxfp8_b12x.py`): SGLang's
+  CUTLASS SM120 kernel pads M=6→128 at decode (measured 50–75 GB/s, 52 ms of a
+  118 ms decode step); the b12x warp-level kernel takes small-M tiles instead.
+- **Shared-expert K pad** (`adapter/shared_pad_k.py`, gate `DSV41_SHARED_PAD_K=1`):
+  pads down_proj K 576→640 so the one b12x-rejected shape re-enters the fast path
+  (bit-identical output; zero-block-scales encoded as 1.0).
+- **MoE ladder caps** (`DSV41_MOE_B12X_CAPS=128,…,4096`, `DSV41_MOE_B12X_QUANT=a8`):
+  per-bucket exact kernels up to a 96-row exactness cap, a8 activation quant above.
+
+### Layer 2 — fused DeepSeek-V4 decode operators (`sglang-overlay/`, 42 grafted files)
+
+Per-file bind-mount grafts over the image's sglang tree (see `SGLANG_OVERLAY_MAP` in
+`start.sh`; the same files are baked into the production image at build time).
+Headline operators, all fusing what upstream runs as separate kernels:
+
+- `c1.py` — fused ratio-1 decode: RMSNorm + RoPE + FP4 fake-quant + FlashMLA cache write
+- `c2.py` — fused ratio-2 pair-pooling decode + main-KV write (closed-form softmax; fp32-ulp deltas documented in-file)
+- `fused_norm_rope_v2.cuh` / `main_norm_rope.cuh` / `store.cuh` / `c1.cuh` / `c2.cuh` / `kv_layout.cuh` — the CUDA halves of the same fusions
+- `dspark_accept.py` / `dspark_draft.py` / `fast_argmax.py` / `dflash_info_v2.py` — DSpark speculative decode accept/draft path (two-stage split argmax, packed top-k)
+- `decode_cuda_graph_runner.py`, `deepseek_v4_backend.py`, `deepseek_v2.py` — graph capture and backend routing
+- `deepseek_v4_memory_pool.py` + `kv_cache_configurator.py` — **fork-v4-fp4 KV layout**: ratio-1 latents stored as FP4 (lossless vs upstream's second FP8 rounding; ratio-4/128 latents stay FP8)
+- `dsv4_prefill_reuse.py` — adjacent prefill query rows reuse overlapping top-K sets (env-gated OFF by default)
+- `engram.py` / `engram_hash.py` — Engram embedding row-cache integration
+
+### Layer 3 — host-side adapters (`adapter/`)
+
+- `engram_backend.py` + `librow_store.so` (from `row_store.cpp`) — bounded exact
+  file-backed replacement for EngramEmbedding's owned-row gather (C++ extension,
+  not pure Python — needs the matching image to run)
+- `prefill_empty_cache.py` — returns each long-prefill chunk's transient indexer
+  memory to the allocator between chunks (600K-context headroom)
+
+### ⚠️ Risks you accept by using this build
+
+1. **Bit-exactness is per-path, not global.** c1/c2 use closed-form softmax and FMA
+   contraction that can differ from torch by fp32 ulps; MoE `a8` mode quantizes
+   activations above the exact ladder. Quality gates (GSM8K 0.9600, needle 30K–470K,
+   corruption 0/0/0, code-gate 12/12) passed on the pinned build — but a different
+   sampling temperature or workload mix shifts the tail.
+2. **Version pinning is load-bearing.** The kernels bind to SGLang `e087e662b` +
+   FlashInfer 0.6.18 + PyTorch 2.13.0+cu130 + driver 580.173.02. Rebase upstream and
+   the grafts (esp. `deepseek_v2.py`, `deepseek_v4_backend.py`, graph runner) are the
+   first things to break — `SGLANG_OVERLAY_MAP` is a shim surface, not an API.
+3. **K-pad & ladder are shape-coupled.** The shared-expert pad hard-codes
+   K=576→640; a different `moe_intermediate_size` or TP degree silently changes the
+   shape and the pad either no-ops or misroutes. `DSV41_MOE_B12X_CAPS` likewise
+   encodes this model's bucket geometry.
+4. **FP4 KV layout halves per-token latent bytes.** Measured lossless for ratio-1
+   latents (they are fp4-rounded upstream anyway), but it changes the memory pool
+   layout — third-party pool tooling or future upstream layout changes will not
+   read it.
+5. **Graph-capture safety is on the honor system.** b12x `bind()` is written to be
+   capture-safe, and freeze_kernel_resolution raises on a cache miss inside a live
+   request — but any new shape hitting the frozen set mid-serve is a hard error,
+   not a slow fallback.
+6. **Two known regressions, documented not hidden**: c6 aggregate −9% (EP2 side
+   effect) and 900K context fails (Engram cache + K-pad buffer cost ~2 GB of
+   deep-context headroom; 600K and below unaffected).
+7. **No upstream review.** Every file here is a local engineering artifact
+   (r9-ops lane work, 2026-09-15 wave ports of upstream PRs #38409/#39370/#39420/#39187/#38979
+   re-authored for this fork). Treat it as an engineering snapshot, not a
+   distribution-quality patch set: audit `sglang-overlay/` against your own
+   threat/perf model before reusing.
+
 ## Repo contents
 
 - `start.sh / start-tp4.sh / stop.sh / boot.py` — serving orchestration, pinned checkpoint boot, smoke + warm-up
