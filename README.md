@@ -260,11 +260,13 @@ Full six-stack comparison incl. LuZ / Vision-Exp / GLM:
   sglang tree (Layer 2 above)
 - `b12x-site/` — vendored b12x CuTe-DSL kernel library (Layer 1 above)
 - `scripts/` — SSH helper, `verify/` probe kit, self-heal monitor + systemd unit,
-  `gate.sh`, `nccl_selfcheck.sh`
+  `gate.sh`, `nccl_selfcheck.sh`, `verify_release_artifact.py` (**offline** archive
+  verifier: blob integrity + content identity, no cluster needed)
 - `bench/` — gate suite (needle / corruption / termination / code-gate), vision gate,
   event-timeline matrix + common-window analysis, prose, GSM8K, third-party-shaped sweep
 - `data/` — **raw benchmark archives** (PR 30-cell, DE 15-cell free-form, DE 10-cell
-  structured) so every summary number can be re-derived
+  structured) so every summary number can be re-derived, plus the recorded offline audit
+  of the release archive (`data/release-artifact-20260918/`)
 - `.env.tp4.example` — the configuration this repo runs (sanitized template; the live
   `.env.tp4` is gitignored)
 - `BUILD-IDENTITY.md` — image IDs, SGLang commit, component versions, artifact hashes
@@ -281,23 +283,33 @@ The serving image (13.5 GiB) is distributed via cloud drive:
 - **File**: `LuZ-0.1.7-DSV41F-image.tar.zst`
 - **Size**: 14,463,467,578 bytes (13.5 GiB)
 - **MD5**: `10307040cd70ab23436bf34eee829d24`
-- **Content identity**: `4ebef21b6aedbd70` — the same value all four production nodes report
+- **Content identity**: `4ebef21b6aedbd70` — the same value all four production nodes report, and **re-derivable offline from the archive itself**
 
-Load after download (all four nodes need the image), then verify identity:
+Verify before you load anything (no cluster, no docker daemon, no GPU needed):
 
 ```bash
-docker load -i LuZ-0.1.7-DSV41F-image.tar.zst   # requires zstd; decompresses to dsv41-sglang-optimized:v7
+pip install zstandard
+python scripts/verify_release_artifact.py LuZ-0.1.7-DSV41F-image.tar.zst --md5
+# md5 MATCH · 123/123 blob sha256 verified · 0 unreferenced blobs
+# content identity 4ebef21b6aedbd70 · RESULT: PASS  (exit 0)
+```
+
+Then load on all four nodes (all of them need the image) and re-check identity locally:
+
+```bash
+docker load -i LuZ-0.1.7-DSV41F-image.tar.zst   # requires zstd; restores dsv41-sglang-optimized:v7
 docker image inspect -f '{{join .RootFS.Layers " "}}' dsv41-sglang-optimized:v7 \
   | sha256sum | cut -c1-16      # expect: 4ebef21b6aedbd70
 ```
 
 That one-liner is the formula `start.sh`'s own preflight uses, so a passing local check
 means the fleet-level check will pass too. **Do not** verify by layer count or by
-`docker image inspect --format '{{.Id}}'`: the reported image ID differs between the
-head and the workers (a `docker save`/`load` re-serialisation artifact) even though all
-123 layers and the whole `Config` section are byte-identical. Full reasoning, the two
-look-alike formulas that give *different* values, and the empty-input trap
-(`01ba4719c80b6fe9` = a **missing** image, not an identity) are in
+`docker image inspect --format '{{.Id}}'`: the reported image ID differs between the head
+(`03587ce9…`) and the workers (`9e1036bc…`) because those are *two different objects in
+the same archive* — the OCI index blob and the image-config blob respectively — while the
+123-layer content is identical. Full reasoning, all five serializations of the same layer
+list that have been published as "the identity" (they hash to five different values), and
+the empty-input trap (`01ba4719c80b6fe9` = a **missing** image, not an identity) are in
 [BUILD-IDENTITY.md](BUILD-IDENTITY.md).
 
 ---

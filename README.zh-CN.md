@@ -231,11 +231,11 @@ b12x 是消费级 Blackwell（SM120/SM121）的 CuTe-DSL 内核库：NVFP4/MXFP4
 - `adapter/` — SGLang 补丁（Engram 行存储 C++、MXFP8 后端、共享专家 K padding、prefill 缓存钩子）
 - `sglang-overlay/` — graft 到镜像 sglang 树上的融合 DeepSeek-V4 decode 算子（上文第二层）
 - `b12x-site/` — vendor 的 b12x CuTe-DSL 内核库（上文第一层）
-- `scripts/` — SSH 助手、`verify/` 探针集、自愈监控 + systemd 单元、`gate.sh`、`nccl_selfcheck.sh`
+- `scripts/` — SSH 助手、`verify/` 探针集、自愈监控 + systemd 单元、`gate.sh`、`nccl_selfcheck.sh`、`verify_release_artifact.py`（**离线**归档校验器：blob 完整性 + 内容身份，无需集群）
 - `bench/` — 门禁套件（needle / corruption / termination / code-gate）、vision 门禁、
   事件矩阵 + 重叠窗分析、散文、GSM8K、第三方形状并发扫描
 - `data/` — **基准原始归档**（PR 30 格、DE 自由文本 15 格、DE 结构化 10 格），
-  保证汇总数字都可独立复算
+  保证汇总数字都可独立复算；另含发布件离线审计记录 `data/release-artifact-20260918/`
 - `.env.tp4.example` — 本仓库实际运行的配置（脱敏模板；现网 `.env.tp4` 已 gitignore）
 - `BUILD-IDENTITY.md` — 镜像 ID、SGLang commit、组件版本、发布件哈希
 - `docs/` — 部署方案、上游 ISSUE/PR 调研、基准横向对比、终版指标板、[勘误](docs/ERRATA-2026-09-18.md)
@@ -250,9 +250,18 @@ b12x 是消费级 Blackwell（SM120/SM121）的 CuTe-DSL 内核库：NVFP4/MXFP4
 - **文件**：`LuZ-0.1.7-DSV41F-image.tar.zst`
 - **大小**：14,463,467,578 字节（13.5 GiB）
 - **MD5**：`10307040cd70ab23436bf34eee829d24`
-- **镜像内容身份**：`4ebef21b6aedbd70` —— 与四台生产机报出的值完全一致
+- **镜像内容身份**：`4ebef21b6aedbd70` —— 与四台生产机报出的值完全一致，且**可由发布包本身离线复现**
 
-下载后在四机分别载入，然后**按内容身份自检**：
+载入之前先**离线自证**（无需集群、无需 docker 守护进程、无需 GPU）：
+
+```bash
+pip install zstandard
+python scripts/verify_release_artifact.py LuZ-0.1.7-DSV41F-image.tar.zst --md5
+# md5 吻合 · 123/123 个 blob 的 sha256 全部自洽 · 0 个未引用 blob
+# 内容身份 4ebef21b6aedbd70 · RESULT: PASS  （退出码 0）
+```
+
+然后在四机分别载入，并按内容身份自检：
 
 ```bash
 docker load -i LuZ-0.1.7-DSV41F-image.tar.zst   # 需要 zstd；解压为 dsv41-sglang-optimized:v7
@@ -261,10 +270,11 @@ docker image inspect -f '{{join .RootFS.Layers " "}}' dsv41-sglang-optimized:v7 
 ```
 
 该一行式**就是 `start.sh` 自检用的同一条公式**，所以本机算得过＝集群断言也过得。
-**不要**用层数或 `docker image inspect --format '{{.Id}}'` 验收：head 与 worker 报出的
-镜像 ID 不同（`docker save`/`load` 的**重序列化伪影**），但 123 层与整个 `Config` 段
-**逐字节相同**。完整论证、两条看上去等价却算出**不同值**的公式、以及空输入陷阱
-（`01ba4719c80b6fe9` 表示**镜像缺失**，不是身份）见 [BUILD-IDENTITY.md](BUILD-IDENTITY.md)。
+**不要**用层数或 `docker image inspect --format '{{.Id}}'` 验收：head 报 `03587ce9…`、
+worker 报 `9e1036bc…`，是因为那**是同一份归档里的两个不同对象**（OCI index blob 与
+image config blob），而 123 层的内容完全相同。完整论证、**同一条层清单的五个序列化
+口径**（它们哈希出五个不同值）、以及空输入陷阱（`01ba4719c80b6fe9` 表示**镜像缺失**，
+不是身份）见 [BUILD-IDENTITY.md](BUILD-IDENTITY.md)。
 
 ---
 
