@@ -29,6 +29,14 @@ prefixes. **This is a throughput test, not a quality test.**
 `peak_client_overlap`, `manifest_sha256`, `effective_prefill_tps`, `median_ttft_s`,
 `median_decode_tps`, `errors`.
 
+⚠️ **Known gap (still open as of 2026-09-18).** `COMMON-WINDOW.md` and the
+total-decode column of `TOTAL-DECODE-MATRIX.md` are **not** re-derivable from what is
+shipped here. The tool that computes them, `benchmarks/common_window.py`, consumes
+**raw per-cell request records** named `<size>-c<N>.json`; this directory ships only the
+summarised arrays `matrix-c1c4c16.json` / `matrix-c2c8.json`. The raw records were not
+retained. Every other column of the PR matrix *is* re-derivable. Recorded as V4 in
+[`../benchmarks/README.md`](../benchmarks/README.md) §4.
+
 - **Effective prefill** includes queueing and mixed decode work until the last request
   reaches its first token.
 - **Median decode** is the per-request median over emitted tokens 129–641, including
@@ -70,6 +78,16 @@ passing `json_schema` as a **dict** kills the engine (`TypeError: unhashable typ
 guarantees a full token budget if the schema can terminate early.
 
 ---
+
+## `gsm8k-20260917/` — the two GSM8K runs
+
+200 questions, 8-shot CoT, temp 0.6, concurrency 1, through the `:8003` gateway.
+Two rows: the 600 K production form with the fp4 indexer **off** (0.9600) and
+**on** (0.535, with 92 gateway-side errors — see that directory's README for why
+both the raw rate and the 107/108 among completed requests must be quoted).
+
+Added 2026-09-18: README §2 and the metrics board publish these figures, but the
+summary files were not in the repository, so the numbers had nothing behind them.
 
 ## `release-artifact-20260918/` — offline audit of the shipped image
 

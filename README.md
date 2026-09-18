@@ -262,11 +262,15 @@ Full six-stack comparison incl. LuZ / Vision-Exp / GLM:
 - `scripts/` — SSH helper, `verify/` probe kit, self-heal monitor + systemd unit,
   `gate.sh`, `nccl_selfcheck.sh`, `verify_release_artifact.py` (**offline** archive
   verifier: blob integrity + content identity, no cluster needed)
+- `benchmarks/` — the harnesses that produced the tables, with a
+  [harness-to-archive map](benchmarks/README.md): PR matrix, DE free-form, DE
+  structured, fp4-indexer A/B, gateway-vs-direct A/B
 - `bench/` — gate suite (needle / corruption / termination / code-gate), vision gate,
-  event-timeline matrix + common-window analysis, prose, GSM8K, third-party-shaped sweep
+  prose, GSM8K, third-party-shaped sweep, MoE numeric/capacity ladders
 - `data/` — **raw benchmark archives** (PR 30-cell, DE 15-cell free-form, DE 10-cell
-  structured) so every summary number can be re-derived, plus the recorded offline audit
-  of the release archive (`data/release-artifact-20260918/`)
+  structured, 2 GSM8K runs) so every summary number can be re-derived, plus the recorded
+  offline audit of the release archive (`data/release-artifact-20260918/`). One column is
+  a known exception — see [`data/README.md`](data/README.md)
 - `.env.tp4.example` — the configuration this repo runs (sanitized template; the live
   `.env.tp4` is gitignored)
 - `BUILD-IDENTITY.md` — image IDs, SGLang commit, component versions, artifact hashes
