@@ -10,6 +10,15 @@ All runs below were made against the **current production form**:
 DSpark (draft k=5 / verify=6) · fp4 indexer **enabled**. See
 [`../BUILD-IDENTITY.md`](../BUILD-IDENTITY.md) for the exact image and software stack.
 
+> ⚠️ **Provisional archives.** The benchmark toolchain is under revision: the harnesses do
+> not yet share one statistics convention, so `pr-matrix-20260917/`,
+> `de-freeform-20260917/` and `de-structured-20260918/` are **provisional and will be
+> re-measured**. Every file here is the unmodified output of its run, and every number in
+> it stays re-derivable from the file; the caveat is only about comparing *across* tables.
+> `gsm8k-20260917/` and `release-artifact-20260918/` are **not** affected. See
+> [`../benchmarks/README.md`](../benchmarks/README.md) §3 for the census and §6 for the
+> scope and exit criteria of the re-run.
+
 ---
 
 ## `pr-matrix-20260917/` — prefill / decode matrix, 30 cells
@@ -17,6 +26,9 @@ DSpark (draft k=5 / verify=6) · fp4 indexer **enabled**. See
 6 input sizes (512, 2048, 8192, 32768, 131072, 524288 tokens) × 5 concurrencies
 (1, 2, 4, 8, 16), 1024-token output budget, synthetic repeated text with unique
 prefixes. **This is a throughput test, not a quality test.**
+
+Harness: [`../benchmarks/matrix.py`](../benchmarks/matrix.py) — per-cell value is
+`statistics.median`. ⚠️ **Provisional**, pending the re-run in `benchmarks/README.md` §6.
 
 | file | content |
 |---|---|
@@ -51,6 +63,10 @@ retained. Every other column of the PR matrix *is* re-derivable. Recorded as V4 
 512-token prompt, 4096-token output budget with `ignore_eos`, three task shapes
 (coding / json / prose) × five concurrencies. Single wave per cell (not a 3-wave median).
 
+Harness: [`../benchmarks/de_matrix.py`](../benchmarks/de_matrix.py) — per-cell value is the
+**upper** median `sorted(x)[n//2]`, and the prefill numerator is hardcoded `512.0`.
+⚠️ **Provisional**, pending the re-run in `benchmarks/README.md` §6.
+
 | file | content |
 |---|---|
 | `de_matrix.json` | the 15 summary rows |
@@ -66,6 +82,11 @@ Row fields: `task`, `conc`, `ok`, `requested`, `prefill_tps`, `decode_tps`,
 
 Same shape as above but with a **xgrammar `json_schema`** constraint applied
 (coding / json × five concurrencies), **3 waves per cell** with the median reported.
+
+Harness: [`../benchmarks/de_matrix_structured.py`](../benchmarks/de_matrix_structured.py) —
+`statistics.median`, aggregated as the median of the 3 per-wave medians. This is the third
+aggregation rule in the suite, so §4/§5 are comparable to §3 only at C=1. ⚠️
+**Provisional**, pending the re-run in `benchmarks/README.md` §6.
 
 | file | content |
 |---|---|

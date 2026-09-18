@@ -12,7 +12,8 @@ decode operators, a self-heal monitor, the benchmark gate suite, and the raw
 benchmark archives. **No weights, no images, no NCCL binaries.**
 
 中文说明 → **[README.zh-CN.md](README.zh-CN.md)** · 完整部署与基准文档 → **[docs/](docs/)** ·
-勘误记录 → **[docs/ERRATA-2026-09-18.md](docs/ERRATA-2026-09-18.md)**
+勘误记录 → **[docs/ERRATA-2026-09-18.md](docs/ERRATA-2026-09-18.md)** ·
+⚠️ 基准工具链状态（PR/DE 表格暂定）→ **[benchmarks/README.md](benchmarks/README.md) §6**
 
 ---
 
@@ -42,6 +43,14 @@ Measured on the running production build. **The full 30-cell PR matrix + 15-cell
 free-form matrix + 10-cell structured matrix are in
 [docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)**;
 raw archives in [`data/`](data/).
+
+> ⚠️ **Provisional — the benchmark toolchain is under revision, and the PR and DE tables
+> will be re-run.** The harnesses behind these tables do not currently share one
+> statistics convention, so numbers are not yet comparable across them. Every value below
+> is a measured value and none is withdrawn; what is not yet true is that one rule
+> produced all of them. The two **decode** peaks are DE free-form rows; the **prefill**
+> and **TTFT** rows are PR-matrix rows; GSM8K and cold start are unaffected. Scope and
+> exit criteria: [`benchmarks/README.md`](benchmarks/README.md) §6.
 
 | metric | value |
 |---|---|

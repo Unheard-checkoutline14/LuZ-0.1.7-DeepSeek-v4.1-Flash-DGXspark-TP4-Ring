@@ -10,7 +10,8 @@ SGLang 猴补丁 / 融合 decode 算子、自愈监控、基准门禁套件，�
 **不含权重、镜像、NCCL 二进制。**
 
 English → **[README.md](README.md)** · 完整文档 → **[docs/](docs/)** ·
-勘误记录 → **[docs/ERRATA-2026-09-18.md](docs/ERRATA-2026-09-18.md)**
+勘误记录 → **[docs/ERRATA-2026-09-18.md](docs/ERRATA-2026-09-18.md)** ·
+⚠️ 基准工具链状态（PR/DE 表格暂定）→ **[benchmarks/README.md](benchmarks/README.md) §6**
 
 ---
 
@@ -38,6 +39,12 @@ English → **[README.md](README.md)** · 完整文档 → **[docs/](docs/)** ·
 在运行中的生产构建上实测。**完整 30 格 PR 矩阵 + 15 格 DE 自由文本矩阵 + 10 格结构化矩阵**
 见 [docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)；
 原始归档在 [`data/`](data/)。
+
+> ⚠️ **暂定值 —— 基准工具链正在修订，PR 与 DE 表格将会重跑。** 产出这些表格的 harness
+> 目前**尚未统一统计口径**，因此跨表数字暂时不可直接对比。下表每一个数值都是实测值、
+> 均未撤回；尚不成立的是「它们出自同一条规则」。其中两个 **decode** 峰值为 DE 自由文本行，
+> **prefill** 与 **TTFT** 行为 PR 矩阵行，GSM8K 与冷启不受影响。影响范围与退出判据见
+> [`benchmarks/README.md`](benchmarks/README.md) §6。
 
 | 指标 | 数值 |
 |---|---|
