@@ -1,0 +1,38 @@
+{
+  "archive": "LuZ-0.1.7-DSV41F-image.tar.zst",
+  "bytes": 14463467578,
+  "md5": "10307040cd70ab23436bf34eee829d24",
+  "md5_ok": true,
+  "tar_members": 128,
+  "blob_members": 123,
+  "blob_hash_failures": [],
+  "dag": [
+    {
+      "kind": "image",
+      "manifest": "blobs/sha256/be741c200a22b4cff4fb791eb4d9261dfc241e8b4eec02a44fb620422c59f6fa",
+      "config": "blobs/sha256/9e1036bc6a106e76c90b639c572d7171d3ef466a3df0746700035b64a1692082",
+      "layers": 123,
+      "distinct": 117
+    },
+    {
+      "kind": "attestation",
+      "manifest": "blobs/sha256/4ca1fb49073d417dfde8885b2253409ccd86fd9a0e6e0575ffd650327ff707f9",
+      "config": "blobs/sha256/eed6883c9729f7bff538c560d7ff7ad5bb4342a9c64782d778129c3b27885bce",
+      "layers": 1,
+      "distinct": 1
+    }
+  ],
+  "unreferenced_blobs": [],
+  "content_identity": "4ebef21b6aedbd70",
+  "content_identity_full": "4ebef21b6aedbd70d5a2563ab512c31a85fc3b3e221c3b2beac6a9d06e2c12c1",
+  "serializations": {
+    "space-joined + trailing newline  [AUTHORITATIVE: docker image inspect -f '{{join .RootFS.Layers \" \"}}' | sha256sum]": "4ebef21b6aedbd70",
+    "space-joined, no trailing newline": "bb7c2d4b38af0514",
+    "newline-joined, no trailing newline": "c8751accc458138c",
+    "newline-joined + trailing newline": "38bbe8265458f328",
+    "newline-joined + two trailing newlines": "0050285e87c6f408"
+  },
+  "expected": "4ebef21b6aedbd70",
+  "config_digest": "9e1036bc6a106e76c90b639c572d7171d3ef466a3df0746700035b64a1692082",
+  "oci_index_digest": "03587ce92d08be1a1a567fe20d350ee6d0d620785fe8089b385b37331e064cc4"
+}
