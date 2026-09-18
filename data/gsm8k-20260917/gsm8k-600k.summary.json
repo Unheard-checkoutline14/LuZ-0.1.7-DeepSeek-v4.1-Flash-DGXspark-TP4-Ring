@@ -1,0 +1,18 @@
+{
+  "base": "http://<NODE_IP>:8003",
+  "model": "deepseek-v4.1-flash",
+  "nq": 200,
+  "max_tokens": 1024,
+  "temperature": 0.6,
+  "shots": 8,
+  "concurrency": 1,
+  "accuracy_content": 0.96,
+  "correct_content": 192,
+  "accuracy_marker": 0.96,
+  "correct_marker": 192,
+  "err": 0,
+  "median_ct": 128,
+  "median_elapsed": 2.22,
+  "elapsed_s": 501.0,
+  "ts": "2026-09-17 11:50:42"
+}
