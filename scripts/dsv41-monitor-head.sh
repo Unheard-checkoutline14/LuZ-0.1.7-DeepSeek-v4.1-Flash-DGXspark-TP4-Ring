@@ -26,7 +26,10 @@ while :; do
   if [ "$FAILS" -lt 3 ]; then sleep 60; continue; fi
   echo "[dsv41-monitor] $(date) rebuild: container=$(docker ps -q --filter name=$NAME | wc -l) /health=$(curl -s -m 8 -o /dev/null -w '%{http_code}' $URL 2>/dev/null)" >> "$ROOT/logs-tp4/monitor.log"
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  for h in <WIP_R1> <WIP_R2> <WIP_R3>; do
+  # Worker addresses. The management-network last octet (186-189) is node-index
+  # semantics, not an address; the shared prefix is a placeholder. Override with
+  # WORKER_IPS="a b c" to point this at your own nodes.
+  for h in ${WORKER_IPS:-_PH_HEAD_IP_.187 _PH_HEAD_IP_.188 _PH_HEAD_IP_.189}; do
     ssh -o BatchMode=yes -o ConnectTimeout=8 spark@$h 'docker rm -f dsv41-worker >/dev/null 2>&1' 2>/dev/null || true
   done
   cd "$ROOT" && ENV_FILE=.env.tp4 ./start-tp4.sh serve >> "$ROOT/logs-tp4/monitor.log" 2>&1 || true
