@@ -114,6 +114,31 @@ originally carried two live API keys and an internal IP address in plaintext;
 those are now environment variables with no defaults, and the file refuses to run
 without them.
 
+### 4.1 Scan hits that are benign — please do not "fix" these
+
+The same scan reports hits in pre-existing files. Every one was classified by hand,
+and all of them are benign. They are listed here so that a future pass does not
+spend time on them, and — more importantly — does not "clean" something that is
+load-bearing:
+
+| hit | where | why it stays |
+|---|---|---|
+| `10.0.0.x` addresses | `.env.example`, `.env.tp4.example`, `stop.sh`, `scripts/verify/*.py`, `files/nfs-share.sh` | the repository's own generic scheme: `10.0.0.1` = head, `10.0.0.2` = worker 1. Used consistently across seven files; the real fabric is a different range entirely |
+| `10.0.22.x` / `10.0.23.x` / `10.0.33.x` | same files | part of that same generic scheme (NFS pairs), not the fabric |
+| `zurih` | `scripts/verify/ramp2.sh`, `.env.tp4.example` | **upstream author identifier**, not a credential. It appears in the upstream `NOTICE`/copyright lines. Removing it would strip attribution |
+| `?pwd=luzi` | `README.md` §7 | a deliberately published cloud-drive extract code — it is *how* the reader is meant to get the image |
+| `/opt/aicad-prod` | `start.sh`, `deployment plan 09-11` | `aicad` is a **published** project name: README's attribution table already links `github.com/luxingcom/aicad-nccl-optimization` as the origin of the `libncclpin` shim. The path reveals nothing not already credited |
+| `~189 GiB` | `boot.py:281` | a memory *size*, matching an address-shaped pattern by coincidence |
+| `149.8 / 140.3 tok/s` | research reports | throughput pairs; the second value matches a ring-host-octet pattern by coincidence |
+| `disk-cache-hit`, `mask-initialization` | `b12x-site/` | matched an `sk-` key pattern mid-word; a left word boundary excludes them |
+| `API_KEY = "YOUR_API_KEY"` | `bench/gsm8k_dsv41.py`, `scripts/verify/*` | already the intended public placeholder |
+| `password = os.environ.get("WORKER_PASS")` | `scripts/remote.py` | a variable *reference*, not a literal |
+
+The two categories that caused real false positives in the first pass were
+**numeric coincidence** (a throughput figure shaped like an address fragment) and
+**mid-word substring matches** (`di…sk-cache-hit`). Both are now pinned as
+regression cases in the scanner's self-test.
+
 ---
 
 ## 5. What is deliberately not here
