@@ -15,9 +15,10 @@ DSpark (draft k=5 / verify=6) · fp4 indexer **enabled**. See
 > `de-freeform-20260917/` and `de-structured-20260918/` are **provisional and will be
 > re-measured**. Every file here is the unmodified output of its run, and every number in
 > it stays re-derivable from the file; the caveat is only about comparing *across* tables.
-> `gsm8k-20260917/` and `release-artifact-20260918/` are **not** affected. See
-> [`../benchmarks/README.md`](../benchmarks/README.md) §3 for the census and §6 for the
-> scope and exit criteria of the re-run.
+> `gsm8k-20260917/`, `release-artifact-20260918/` and `de-v3-20260918/` are **not**
+> affected (v3 already uses the unified convention). See
+> [`../benchmarks/README.md`](../benchmarks/README.md) §3 for the census, §6 for the
+> scope and exit criteria of the re-run, and §7 for the v3 harness.
 
 ---
 
@@ -97,6 +98,38 @@ aggregation rule in the suite, so §4/§5 are comparable to §3 only at C=1. ⚠
 passing `json_schema` as a **dict** kills the engine (`TypeError: unhashable type:
 'dict'` → container exit 247); and under grammar constraints `ignore_eos=True` no longer
 guarantees a full token budget if the schema can terminate early.
+
+---
+
+## `de-v3-20260918/` — sparkDash-aligned decode matrix, 20 cells
+
+**The corrected DE measurement** (FINAL-METRICS §4b). 4 prompt-label types
+(structured / prose / code / json, prompts verbatim from sparkDash
+`src/shared/llmPrompts.js`) × 5 concurrencies × 3 waves, `max_tokens=2048`,
+`min_tokens=max_tokens + ignore_eos + stop=[]` force-fill, temp 0 / top_p 1 /
+thinking off, **no grammar constraint of any kind**. One aggregation rule for all
+cells (`statistics.median` over all ok streams of all waves), with the convention
+and wave count recorded inside the JSON itself.
+
+Harness: [`../benchmarks/de_matrix_v3.py`](../benchmarks/de_matrix_v3.py) — rationale,
+root-cause analysis of the §3/§4 distortion, and the cross-channel validation against
+sparkDash's own run (+0.7 %) are in [`../benchmarks/README.md`](../benchmarks/README.md) §7.
+
+| file | content |
+|---|---|
+| `de_v3_matrix.json` | `_meta.protocol` + the 20 summary rows (each row carries its `convention` string) |
+| `de_matrix_v3.py` | copy of the harness that produced this archive (frozen for reproducibility) |
+
+Per-stream raw records live on the machine at
+`bench-results/de-v3-20260918/de_<type>_c<N>.json` (they exceed the per-file budget
+kept in this repository); the summary JSON is complete and self-describing.
+
+| headline | value |
+|---|---|
+| C1 decode t/s | structured 83.0 · prose 47.4 · code 84.3 · json 78.1 |
+| C16 aggregate t/s | structured 302.6 · prose 206.3 · code **562.9** · json 472.0 |
+| ranking | code > json > structured > prose at every concurrency |
+| cross-check vs sparkDash (`:8001`) | json C1 78.14 vs 77.59 t/s = **+0.7 %** |
 
 ---
 

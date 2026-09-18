@@ -87,9 +87,31 @@ Per-request decode, TTFT and common-window aggregate columns are in the full doc
 | coding *(xgrammar-constrained)* | 89.5 | 115.9 | 182.6 | 210.4 | **367.2** |
 | json *(xgrammar-constrained)* | 30.2 | 66.5 | 126.2 | 183.5 | 269.8 |
 
-**Structured output costs you at low concurrency** (coding C1: 99.4 → 89.5 tok/s,
-−10.0 %) and pays back at high concurrency (coding C16: 339.0 → 367.2, +8.3 %);
-json loses at every level (−19.9 % at C16). Per-cell deltas are in the full doc.
+### DE v3 — sparkDash-aligned decode matrix (2026-09-18, the corrected read) ✅
+
+The two DE tables above do not answer "which output *shape* is fastest": the constrained
+rows pay a per-token xgrammar mask no other row carries, and the free-form rows use
+different prompts and a single wave. `de_matrix_v3.py` re-measures all four shapes under
+sparkDash's own protocol — prompt-label types, **no grammar**, budget force-filled with
+`min_tokens=max_tokens + ignore_eos + stop=[]`, temp 0 / top_p 1 / thinking off,
+3 waves, one aggregation rule — and cross-checks against sparkDash's own run through
+`:8001` (+0.7 %). Full matrix in [FINAL-METRICS §4b](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md);
+root cause and validation in [`benchmarks/README.md`](benchmarks/README.md) §7.
+
+**Aggregate decode tok/s** (`max_tokens=2048`):
+
+| Type | C=1 | C=2 | C=4 | C=8 | C=16 |
+|---|---:|---:|---:|---:|---:|
+| code | 84.3 | 130.2 | 229.8 | 320.5 | **562.9** |
+| json | 78.1 | 125.1 | 193.8 | 268.5 | 472.0 |
+| structured | 83.0 | 115.9 | 114.7 | 188.5 | 302.6 |
+| prose | 47.4 | 71.0 | 100.0 | 132.1 | 206.3 |
+
+**Ranking: code > json > structured > prose at every concurrency.** Structured shapes
+decode *faster* than prose — dense, predictable tokens give DSpark speculation more to
+work with. Earlier appearances that "structured scored below prose" compared a
+grammar-constrained workload against a free-form one; that gap is the cost of guided
+decoding (json C1: 78.1 → 30.2 t/s, −61 %), not a model property.
 
 **Two structured-output traps** (both reproduced):
 

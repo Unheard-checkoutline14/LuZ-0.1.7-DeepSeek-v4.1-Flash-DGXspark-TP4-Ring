@@ -25,6 +25,7 @@ If you want to re-derive a number rather than trust it, start here and in
 | `matrix.py` | prefill/decode matrix, 6 input sizes × 5 concurrencies; `effective_prefill_tps`, `median_ttft_s`, `median_decode_tps`, `peak_client_overlap` | `data/pr-matrix-20260917/` (30 cells) | README §2, FINAL-METRICS §2 |
 | `de_matrix.py` | decode-throughput matrix, 3 task shapes × 5 concurrencies, **free-form** (no grammar) | `data/de-freeform-20260917/` (15 cells) | README §2, §3 |
 | `de_matrix_structured.py` | same, but **xgrammar `json_schema`-constrained**, coding/json × 5 concurrencies, 3 waves per cell | `data/de-structured-20260918/` (10 cells) | FINAL-METRICS §4, §5 |
+| `de_matrix_v3.py` | decode matrix **sparkDash-aligned**: 4 prompt-label types (structured/prose/code/json), **no grammar**, `min_tokens=max_tokens + ignore_eos + stop=[]` force-fill, 3 waves, unified `statistics.median` | `data/de-v3-20260918/` (20 cells) | FINAL-METRICS §4b |
 | `code256_bench.py` | fixed 256-token code prompt at C=1/8/16 — the fp4-indexer A/B | (stdout only; deltas in §7) | FINAL-METRICS §7 |
 | `pr_ab_gw_vs_direct.py` | identical long prompt through the `:8001` gateway vs straight to `:8899`, alternating order | (stdout only) | FINAL-METRICS §9 |
 | `common_window.py` | re-analysis: delivered throughput while every stream in a wave overlaps | `data/pr-matrix-20260917/COMMON-WINDOW.md`, `TOTAL-DECODE-MATRIX.md` | README §2 |
@@ -265,3 +266,66 @@ The re-run needs a cluster window and an OOM-safe restart on a form that duplica
 production; **this repository only carries the request, the harnesses and the archives**,
 never the run itself. The request is stated in the project's engineering-assurance
 deliverables.
+
+---
+
+## 7. `de_matrix_v3.py` — the sparkDash-aligned DE harness (lands the DE part of §6)
+
+**Status: measured 2026-09-18 against the live production form; archive
+[`../data/de-v3-20260918/de_v3_matrix.json`](../data/de-v3-20260918/de_v3_matrix.json),
+published in FINAL-METRICS §4b.** This harness is the DE portion of the §6 revision,
+shipped early because the user-visible defect — "structured coding/json scores below
+prose" — traced to a methodology fault, not to the engine.
+
+### Root cause of the published distortion (two independent faults)
+
+1. **Grammar vs prompt-label.** `de_matrix_structured.py` (§4) sends
+   `sampling_params.json_schema`, so every generated token pays an xgrammar mask
+   computation — a workload no other row on the board carries. sparkDash's DecodeBench
+   never does this: its header states output types are *prompt labels only — never
+   response_format, grammars, or guided JSON*. The §4-vs-§3 comparison was therefore
+   measuring "guided decoding cost" against "free decode" and presenting it as a
+   content-shape ranking.
+2. **Early-EOS median pollution.** Under a grammar, `ignore_eos` is not honored: once
+   the schema's `minItems` constraints are satisfiable, EOS fires and the stream stops
+   at ct = 119–2282 (raw records: `de_json_c2/c8/c16`). Those short streams neither
+   fill the token budget nor fail, and they drag the per-wave medians down.
+
+### What v3 does instead (mirrors sparkDash DecodeBench.js / LlmStreaming.js exactly)
+
+- Four prompt types copied verbatim from sparkDash `src/shared/llmPrompts.js`
+  (structured = count 1→200, prose = hash-map explanation, code = clamp_00…49,
+  json = GPU-metrics array), each + `FILL_TO_MAX_SUFFIX`; per-stream unique suffix
+  defeats prefix-cache sharing.
+- Budget force-fill: `min_tokens = max_tokens`, `ignore_eos = true`, `stop = []` —
+  every stream hits exactly `max_tokens` completion tokens.
+- `temperature 0`, `top_p 1`, thinking off via `chat_template_kwargs`
+  (`enable_thinking/thinking=false`, `thinking_mode="disabled"`); one 32-token warmup
+  stream per type.
+- Timing: per-stream `decode = (completion_tokens − 1) / (tLast − tFirst)`
+  (first→last content-token window); per-wave aggregate over the common window;
+  **one** aggregation rule for all cells (`statistics.median` over all ok streams of
+  all 3 waves), with the convention and wave count written **into the emitted JSON**
+  (`_meta.protocol`, `convention` per cell) — closing §6 items 1–2 for the DE family.
+- Prefill numerator is the engine-reported `usage.prompt_tokens` — closing §6 item 3
+  for the DE family.
+
+### Validation
+
+- **Cross-channel check**: v3 `json` C1 = 78.14 t/s (direct `:8899`) vs sparkDash's own
+  run of the same prompt through `:8001` = 77.59 t/s — **+0.7 %**, consistent with the
+  measured gateway streaming cost (FINAL-METRICS §9).
+- **Ranking restored**: code > json > structured > prose at every concurrency
+  (C16 agg 562.9 / 472.0 / 302.6 / 206.3 t/s) — structured *shapes* decode faster than
+  prose (dense, predictable tokens; DSpark speculation benefits), matching sparkDash's
+  own published behaviour. "Structured below prose" is gone.
+- §4 remains valid as the **guided-decoding cost table**: json C1 30.2 vs 78.1
+  unconstrained (−61 %) is what xgrammar costs, not a model regression.
+
+### Scope note
+
+§6 remains open for the PR matrix (`matrix.py`) and the fp4-indexer A/B
+(`code256_bench.py`): those still need the unified convention re-run in a cluster
+window. The DE family is settled by this harness; when the §6 re-run lands, the
+free-form (§3) and grammar-constrained (§4) tables are superseded by v3's protocol,
+with the old archives kept under the `superseded-` rule above.

@@ -84,6 +84,30 @@ English → **[README.md](README.md)** · 完整文档 → **[docs/](docs/)** ·
 **在高并发才回本**（coding C16：339.0 → 367.2，+8.3 %）；json 全档落后（C16 −19.9 %）。
 逐格差值见完整文档。
 
+### DE v3 —— sparkDash 对齐口径（2026-09-18，修正后的读法）✅
+
+上面两张 DE 表回答不了「哪种输出**形态**最快」：约束行每 token 都要付 xgrammar mask
+（其他行都没有的负载），自由行用的又是不同提示词、单波次。`de_matrix_v3.py` 按
+sparkDash 自己的协议重测四种形态——提示词标签、**零 grammar**、`min_tokens=max_tokens +
+ignore_eos + stop=[]` 强制吃满预算、temp 0 / top_p 1 / 关思考、3 waves、统一聚合规则——
+并与 sparkDash 经 `:8001` 的自测交叉核对（+0.7 %）。完整矩阵见
+[FINAL-METRICS §4b](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)；
+根因与验证见 [`benchmarks/README.md`](benchmarks/README.md) §7。
+
+**聚合 decode tok/s**（`max_tokens=2048`）：
+
+| 类型 | C=1 | C=2 | C=4 | C=8 | C=16 |
+|---|---:|---:|---:|---:|---:|
+| code | 84.3 | 130.2 | 229.8 | 320.5 | **562.9** |
+| json | 78.1 | 125.1 | 193.8 | 268.5 | 472.0 |
+| structured | 83.0 | 115.9 | 114.7 | 188.5 | 302.6 |
+| prose | 47.4 | 71.0 | 100.0 | 132.1 | 206.3 |
+
+**排序：所有并发档均为 code > json > structured > prose。** 结构化**形态**的 decode
+比散文更快——token 致密、可预测性强，DSpark 投机收益更大。此前「结构化不如散文」
+的观感，是拿 grammar 约束负载与自由生成负载相除的产物；那个差距是**引导解码的代价**
+（json C1：78.1 → 30.2 t/s，−61 %），不是模型性质。
+
 **结构化输出两个坑**（均已复现）：
 
 1. 🔴 `sampling_params.json_schema` 传 **dict 会把引擎打崩**
