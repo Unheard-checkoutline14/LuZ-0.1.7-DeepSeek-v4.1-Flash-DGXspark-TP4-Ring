@@ -776,9 +776,15 @@ PROD_IMAGE_ASSETS="/opt/dsv41/boot.py /opt/dsv41/adapter/librow_store.so /opt/b1
 #   拿 .Id 当身份 = 让 serve 永远被自己拦住，而且拦得莫名其妙。
 #   2026-09-18 四机实测佐证：.Config=77799e6ce3de5824、.RootFS=cdd980943dfe9e6b、
 #   .Created=0203e92cacf2a896、org.dsv41.* 标签 —— 逐字段哈希四机全等，只有 .Id 不同。
-# ⚠ 本注释旧版把层清单哈希写成 38bbe8265458…，那是**另一种取行口径**的产物
-#   （docker inspect 全 JSON → 逐行 print → sha256sum），与 IMGID_TPL 的
-#   4ebef21b6aedbd70 不是同一个量。身份哈希必须连**字节精确的管道**一起引用。
+# ⚠ 层清单哈希必须连**字节精确的管道**一起引用。同一条 123 项 diffID 清单，序列化
+#   不同就得到不同的值（2026-09-18 由发布包离线复现，见 scripts/verify_release_artifact.py）：
+#     空格连接 + 尾换行（{{join .RootFS.Layers " "}} 经 sha256sum）⇒ 4ebef21b6aedbd70 ★权威
+#     空格连接、无尾换行                                          ⇒ bb7c2d4b38af0514
+#     换行连接、无尾换行                                          ⇒ c8751accc458138c
+#     换行连接 + 尾换行                                           ⇒ 38bbe8265458f328
+#     换行连接 + 两个尾换行                                       ⇒ 0050285e87c6f408
+#   本注释旧版引用的就是 38bbe8265458…，它**不是幽灵值**，而是「换行连接 + 尾换行」
+#   这一口径的正确结果——错的只是没标出口径。下方 IMGID_TPL 对应的才是权威值。
 IMGID_TPL='{{join .RootFS.Layers " "}}'
 img_content_id() { docker image inspect -f "$IMGID_TPL" "$1" 2>/dev/null | sha256sum | cut -c1-16; }
 

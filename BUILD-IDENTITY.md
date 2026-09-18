@@ -28,11 +28,19 @@ creation timestamp and every `org.dsv41.*` label are **byte-hash-identical**
 (`.Config` → `77799e6ce3de5824`, `.RootFS` → `cdd980943dfe9e6b`, `.Created` →
 `0203e92cacf2a896` on all four).
 
-The mechanism is a **storage-driver split, not a content difference**: the head runs
-the containerd `overlayfs` snapshotter while the workers run classic `overlay2`, and
-the two backends report a different `.Id` for the same loaded content (this is also
-recorded in `start.sh:772-776`, which is the same warning stated for the preflight).
-Verify content, not IDs.
+The mechanism is a **storage-driver split plus a two-object DAG, not a content
+difference**. The head runs the containerd `overlayfs` snapshotter while the workers run
+classic `overlay2` (this is also recorded in `start.sh:772-776`), and — measured against
+the release archive itself on 2026-09-18 — the two IDs are **different objects inside the
+same archive**, each sha256-consistent with its own bytes:
+
+| reported `.Id` | what it is in the archive | size |
+|---|---|---|
+| node 01 `03587ce9…` | the **OCI image-index blob** referenced by `index.json` — the key containerd's image store uses | 857 B |
+| nodes 02-04 `9e1036bc…` | the **image-config blob** referenced by the image manifest — what classic `overlay2` docker reports | 81,769 B |
+
+Both are reachable from `index.json` in one graph; neither describes content. The diffID
+list does. Verify content, not IDs.
 
 > ⚠️ **Do not use layer count or image ID as an acceptance criterion.** This fleet has
 > previously carried two structural forms of the same content, and a distinct
@@ -73,19 +81,27 @@ docker image inspect -f '{{join .RootFS.Layers " "}}' dsv41-sglang-optimized:v7 
 # 2026-09-18, measured on all four nodes: 4ebef21b6aedbd70
 ```
 
-> ⚠️ **The formula is byte-exact — do not "simplify" it.** `docker image inspect -f`
-> emits the joined layer list **with a trailing newline**, and that newline is part of
-> the hashed input. Three equally plausible-looking one-liners give three different
-> values for the *same* image:
+> ⚠️ **The formula is byte-exact — publish it together with the value.** `docker image
+> inspect -f` emits the joined layer list **with a trailing newline**, and that newline is
+> part of the hashed input. Hashing the *same* 123-entry list under five different
+> serializations yields five different 16-hex strings, and all five have appeared in this
+> repo's history labelled "the image identity". They were re-derived **offline from the
+> release archive** on 2026-09-18 by `scripts/verify_release_artifact.py`:
 >
-> | one-liner | value |
-> |---|---|
-> | `-f '{{join .RootFS.Layers " "}}' \| sha256sum \| cut -c1-16` ← **authoritative** | **`4ebef21b6aedbd70`** |
-> | `-f '{{join .RootFS.Layers " "}}' \| tr -d '\n' \| sha256sum \| cut -c1-16` | `bb7c2d4b38af0514` |
-> | `--format '{{range .RootFS.Layers}}{{.}}{{"\n"}}{{end}}' \| sha256sum` | `0050285e87c6f408` |
+> | hashed byte stream | sha256[:16] | where it was published |
+> |---|---|---|
+> | space-joined + trailing `\n` ← **authoritative** (`{{join .RootFS.Layers " "}}` piped to `sha256sum`) | **`4ebef21b6aedbd70`** | `start.sh` `IMGID_TPL`, and this file |
+> | space-joined, no trailing newline | `bb7c2d4b38af0514` | a probe variant |
+> | newline-joined, no trailing newline | `c8751accc458138c` | BUILD-IDENTITY rev.1 |
+> | newline-joined + trailing newline | `38bbe8265458f328` | `start.sh` preflight comment (original) |
+> | newline-joined + two trailing newlines | `0050285e87c6f408` | BUILD-IDENTITY rev.1's stated formula |
 >
-> Always quote the command **with** the value. A hash published without its exact
-> pipeline is unverifiable.
+> **The lesson is not "someone hashed the wrong thing".** Every value above is a correct
+> hash of a real serialization of the real layer list — including the two this repo
+> previously (and wrongly) called ghosts. The defect was publishing a hash without its
+> byte-exact pipeline, which made four different quantities look like four competing
+> claims about one quantity. Only `4ebef21b6aedbd70` is asserted by production code, so
+> only it is *the* identity.
 
 > ⚠️ **Empty-input trap (this pipeline fails *open*, not closed).** If the image is
 > absent, `docker image inspect` writes nothing to stdout and exits non-zero — but the
@@ -103,12 +119,17 @@ docker image inspect -f '{{join .RootFS.Layers " "}}' dsv41-sglang-optimized:v7 
 > both constants. `start.sh` does both (`image_preflight()` step ③); the comment at
 > `start.sh:814-819` records why.
 
-> ℹ️ **Superseded value.** Earlier revisions of this repo and its release notes carried
-> `e541746d26e31a3f` (labelled "layers-json sha256", "recorded at export time") and, in
-> one revision, `c8751accc458138c`. **Neither reproduces** on any node today and neither
-> is used by any production script. They predate the redaction rebuild, which necessarily
-> changed the content identity (see the release-gate record, item **R1**). The current
-> value is `4ebef21b6aedbd70`. See [docs/ERRATA-2026-09-18.md](docs/ERRATA-2026-09-18.md).
+> ⚠️ **One value is still an orphan.** `e541746d26e31a3f` — published in the README as
+> "layers-json sha256", "recorded at export time" — is reproduced by **none** of the 32
+> candidate serializations tested against the release archive: not any serialization of
+> the diffID list, not the image config blob, not either manifest, not `index.json`, not
+> the compressed-layer list. No production script asserts it either. Its most likely
+> origin is a superseded image revision from **before** the redaction rebuild (the
+> release-gate record's item **R1**), but that is a hypothesis, not a measurement.
+> Treat it as **unverifiable**, not as a wrong number — and never as an acceptance
+> criterion. `c8751accc458138c` and `38bbe8265458f328`, by contrast, are no longer
+> orphans: the table above reproduces both. See
+> [docs/ERRATA-2026-09-18.md](docs/ERRATA-2026-09-18.md).
 
 ### Additional build anchors carried by the image
 
@@ -235,15 +256,36 @@ Notable environment gates (full list in `.env.tp4.example`):
 |---|---|
 | File | `LuZ-0.1.7-DSV41F-image.tar.zst` |
 | Size | 14,463,467,578 bytes (13.5 GiB) |
-| MD5 | `10307040cd70ab23436bf34eee829d24` |
-| Produced by | `docker save dsv41-sglang-optimized:v7 \| zstd -T0` on node 01 |
-| Integrity checked | `zstd -t` OK; inner blob manifest visible |
-| Load smoke test | `docker load` back onto node 01 → content fingerprints above reproduced |
-| **MD5 re-verified 2026-09-18** | recomputed over the local artifact copy → `10307040cd70ab23436bf34eee829d24`, **byte-count and hash both match this table** |
+| MD5 | `10307040cd70ab23436bf34eee829d24` — recomputed over the local artifact copy 2026-09-18; byte count and hash both match |
+| Produced by | `docker save dsv41-sglang-optimized:v7 \| zstd -T0` on node 01. Because that node uses the containerd image store, the result is an **OCI layout** (`oci-layout`, `index.json`, `manifest.json`, `blobs/sha256/*`), not the plain `<layer>/layer.tar` form |
+| Tar anatomy | 128 members = **123 blobs** + `index.json` + `manifest.json` + `oci-layout` + 2 directory entries. Payload 14,686,175,317 bytes (uncompressed) |
+| Internal integrity | **all 123 blobs verified**: `sha256(bytes) == its own filename` ⇒ the archive is a self-consistent content-addressed store, nothing truncated |
+| Reference closure | **0 unreferenced blobs** — every blob member is reachable from `index.json` |
+| Content graph | `index.json` → OCI index `03587ce9…` (857 B) → { **image manifest** `be741c20…` (23,717 B, arm64/linux, 123 layers, config `9e1036bc…`), docker **attestation manifest** `4ca1fb49…` (566 B, SBOM/provenance, config `eed6883c…`, 1 layer) }. Budget: 5 metadata blobs + 118 layer blobs (117 image + 1 attestation) = 123 |
+| Layer anatomy | 123 diffIDs, **117 distinct**; `sha256:5f70bf18…` (an empty tar = 1024 NUL bytes) appears **7×** ⇒ 6 of the 123 layers carry no content. The config's `history` marks 108 of its 231 steps `empty_layer` |
+| **Offline reproduction** | the archive **reproduces content identity `4ebef21b6aedbd70` with no cluster, no docker daemon and no GPU** — see `scripts/verify_release_artifact.py` |
+
+The last row closes what used to be the weakest claim in this file. Earlier revisions said
+the released identity could not be re-derived from the repo alone; it now can, from the
+artifact alone:
+
+```bash
+pip install zstandard
+python scripts/verify_release_artifact.py LuZ-0.1.7-DSV41F-image.tar.zst --md5
+# md5 MATCH · 123/123 blobs verified · 0 unreferenced
+# content identity 4ebef21b6aedbd70  (full: 4ebef21b6aedbd70d5a2563ab512c31a85fc3b3e221c3b2beac6a9d06e2c12c1)
+# RESULT: PASS   (exit 0)
+```
+
+The script is fail-closed: a missing file, a truncated archive, an unreferenced blob or a
+mismatch exits non-zero and never prints a plausible-looking hash. Its recorded run output
+and the full blob manifest are published under
+[`data/release-artifact-20260918/`](data/release-artifact-20260918/) so the run can be
+checked without re-downloading 13.5 GiB.
 
 After loading, the image must report content identity **`4ebef21b6aedbd70`** and 123
-layers. (The downloaded artifact and the four production nodes are the same content;
-only the *reported* image ID varies by transport — see the warning at the top.)
+layers. (The downloaded artifact and the four production nodes are the same content; only
+the *reported* image ID varies — see the two-object DAG at the top of this file.)
 
 Load on all four nodes (workers need the image too):
 
@@ -256,6 +298,13 @@ docker load -i LuZ-0.1.7-DSV41F-image.tar.zst   # requires zstd; restores dsv41-
 ## Verification recipe
 
 ```bash
+# 0. OFFLINE — verify the downloaded archive before loading it anywhere.
+#    No cluster, no docker daemon, no GPU required.
+pip install zstandard
+python scripts/verify_release_artifact.py LuZ-0.1.7-DSV41F-image.tar.zst --md5
+# expect: md5 MATCH · 123/123 blob sha256 verified · 0 unreferenced blobs
+#         content identity 4ebef21b6aedbd70 · RESULT: PASS  (exit 0)
+
 # 1. content identity — the single fleet-wide acceptance value.
 #    Assert presence FIRST: a missing image yields 01ba4719c80b6fe9, not an error.
 for h in node01 node02 node03 node04; do   # your node aliases: head + 3 workers
@@ -287,7 +336,12 @@ docker image inspect dsv41-sglang-optimized:v7 --format \
 scripts/nccl_selfcheck.sh
 ```
 
-> Checks 1–5 are the acceptance set. **RootFS layer counts and reported image IDs are
+> Checks 0–5 are the acceptance set. **RootFS layer counts and reported image IDs are
 > not** valid pass/fail criteria (see the warnings above), and an identity computation
 > returning `01ba4719c80b6fe9` or `e3b0c44298fc1c14` means **the image is missing**, not
 > that it mismatches.
+>
+> Check 0 needs nothing but the archive, so it is the one to run **first** and the only one
+> a reader without cluster access can run at all. Letting a distribution be verified
+> offline turns "trust the publisher's hash" into "re-derive the publisher's number",
+> which is the whole point of publishing it.
