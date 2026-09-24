@@ -30,3 +30,8 @@ bench-results/
 # carries API_KEY. The rule below closes that path. (The deployment root has had
 # it since 2026-09-21; the omission was public-side only.)
 .env.tp4-*
+
+# 过期 overlay 快照：把旧 overlay 移出树时留下的 `sglang-overlay.stale-<date>/`
+# 不应入库（部署根自 2026-09-21 起就有这条规则；公开仓同样带 sglang-overlay/，
+# 因此同样适用 —— 那是 49 个文件的目录，混入一份过期副本会很难看出来）。
+sglang-overlay.stale-*/

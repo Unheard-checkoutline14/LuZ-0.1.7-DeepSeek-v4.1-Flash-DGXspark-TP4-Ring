@@ -2,6 +2,12 @@
 .gitignore
 .env
 .env.tp4
+# `.env.tp4` 的三种变体名都要挡：精确名、点号后缀（.env.tp4.600k）、连字符
+# 后缀（.env.tp4-<label> —— start.sh 自己教的实验快照配方产出的就是这个名字，
+# 而它是 .env.tp4 的副本、含 API_KEY）。只列精确名属防御不完整：Dockerfile
+# 眼下是精确 COPY、带不上这些文件，但本文件的意义正是「COPY 规则变了也挡住」。
+.env.tp4.*
+.env.tp4-*
 .env.bak-*
 *.bak
 *.bak-*
