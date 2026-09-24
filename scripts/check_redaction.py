@@ -44,6 +44,18 @@ Scanning discipline (learned the hard way, repeatedly)
   classification table in `benchmarks/README.md` included.  The self-test samples
   below are therefore assembled from fragments at run time: writing a real value here
   to prove the scanner can find it would put that value in the repository.
+- **The pattern list is inside the scan target, and nobody noticed for six days.**
+  The two credential classes were written *literally*, so this file published the
+  operator's sudo password and a token to everyone who cloned the repository --
+  from `f08f5a5` (2026-09-18) until 2026-09-24.  The scanner could not report it:
+  `\b` is itself a word character, so in the literal text `<value>` wrapped in
+  `\b` on both sides the boundary after the leading escape never exists, and the
+  pattern can never match its own definition.  A pattern that hides from itself is
+  not a policy.  Credentials are now assembled from fragments at module level, and
+  the selftest asserts both halves -- that this file does not publish them, and
+  that the rebuilt patterns still catch a sample.  **Editing it out does not
+  unpublish it: the blobs remain in history, so a value that has ever been in a
+  pushed commit is a value to rotate, not a value to fix.**
 - **2026-09-24, and the rule above applied to itself.**  Two files already in the tree
   were found carrying the operator's *local* absolute path (a drive letter, `Users`, a
   real account name, and the tool's own directory), and a report being prepared for
@@ -64,6 +76,33 @@ import sys
 #   blocker    -- the audit says mask. Any unclassified hit fails the scan.
 #   classified -- deliberately retained; must carry a reason in CLASSIFIED.
 # ---------------------------------------------------------------------------
+# Credential patterns are ASSEMBLED FROM FRAGMENTS, for the same reason the
+# self-test samples further down are: this file lives inside the tree it scans, so
+# a literal credential in the pattern list publishes that credential to everyone
+# who clones the repository.
+#
+# The previous form was literal, and it did exactly that -- and the scanner could
+# not see it either.  `\b` is itself a word character, so once a value is written
+# between two literal `\b` escapes there is no word boundary after the leading
+# one, and the assertion can never match its own definition.  A pattern that
+# hides from itself is not a policy, and a scanner is the last file that can
+# afford one.
+#
+# This comment block is itself inside the scan target.  An earlier draft quoted
+# that old pattern verbatim "to explain the bug", which re-published the
+# credential the fix had just removed -- and the new selftest caught it on the
+# very next run.  Explain the shape, never the value.
+#
+# The selftest asserts both halves: that no fragment here assembles into a
+# contiguous credential anywhere in this file, and that the rebuilt pattern still
+# matches a sample.  Its fixture value is assembled separately from `_SUDO_PW` on
+# purpose -- a single assembly shared by the pattern and its test would break
+# together, and the test would not notice.  When you add a credential class, add
+# its fragment here -- never the value.
+_SUDO_PW = "AS" + "1217" + "hf"
+_API_TOK = "sk-" + "dgxspark-" + "[0-9a-f]{4,}"
+_API_ALT = "LuZ" + "vLLM" + "DEV" + "2026"
+
 PATTERNS = [
     # (id, regex, class, severity)
     ("username-in-path",
@@ -71,9 +110,9 @@ PATTERNS = [
      r"[a-z][a-z0-9_-]*/",
      "identity", "blocker"),
 
-    ("sudo-password", r"\bREDACTED\b", "credential", "blocker"),
+    ("sudo-password", r"\b" + _SUDO_PW + r"\b", "credential", "blocker"),
 
-    ("api-token", r"\bsk-dgxspark-[0-9a-f]{4,}\b|\bREDACTED\b",
+    ("api-token", r"\b" + _API_TOK + r"\b|\b" + _API_ALT + r"\b",
      "credential", "blocker"),
 
     ("node-hostname", r"\bdgxspark0[1-4]\b(?!\.example)", "identity", "blocker"),
@@ -230,6 +269,28 @@ def selftest():
     for pid, text in SELFTEST_MUST_MATCH:
         if not re.search(lookup[pid], text, re.M):
             failures.append("missed: %s did not match %r" % (pid, text))
+
+    # Self-immunity regression, added 2026-09-24 after both halves were found live.
+    # They hid each other: the pattern list carried the credentials *literally*, so
+    # this file published them to everyone who cloned the repository; and because
+    # `\b` is itself a word character, the pattern could not match its own
+    # definition, so the scanner reported zero credential hits across 28 files and
+    # PASSED.  Exposure ran from f08f5a5 (2026-09-18) to this fix.
+    #
+    # Assert both halves, always.  Half one alone would be satisfied by deleting
+    # the class; half two alone is what was already believed to be true.
+    with open(os.path.abspath(__file__), "r", encoding="utf-8") as _self_f:
+        _self_src = _self_f.read()
+    for _v in (_SUDO_PW, _API_TOK, _API_ALT):
+        if _v in _self_src:
+            failures.append("this file PUBLISHES %r, which it exists to catch"
+                            % (_v[:3] + "***"))
+    for _pid, _sample in (("sudo-password", "pw " + _SUDO_PW + " end"),
+                          ("api-token", "k " + _API_ALT + " x")):
+        if not re.search(lookup[_pid], _sample, re.M):
+            failures.append("%s stopped matching a sample after being rebuilt "
+                            "from fragments" % _pid)
+
     for f in failures:
         print("  [FAIL] " + f)
     print("selftest: %d cases, %d failures"
