@@ -426,6 +426,31 @@ docker image inspect -f '{{join .RootFS.Layers " "}}' dsv41-sglang-optimized:0.2
 `4cca364c46778423`）是权威。七种全表、以及空输入陷阱（`01ba4719c80b6fe9` 表示**镜像缺失**，
 不是身份）见 [BUILD-IDENTITY.md](BUILD-IDENTITY.md)。
 
+### 起栈
+
+镜像只是一半 —— 启动器还需要你自己集群的四个站点键。首次运行时它会替你把模板
+复制出来，并提示你去改：
+
+```bash
+./start-tp4.sh doctor      # 首次会把 .env.tp4.example 复制成 .env.tp4，然后报告
+                           # 连通性 + GPU + checkpoint
+$EDITOR .env.tp4           # 四个站点键：HEAD_IP / WORKER_IPS / WORKER_HOSTS / WORKER_USER
+./start-tp4.sh share       # head 通过 ConnectX 上的 NFSv4 导出它的 checkpoint
+./start-tp4.sh serve       # 先起 workers，再起 head —— API 在 :8899
+```
+
+`./start.sh help` 会打印完整的子命令表（`doctor | pull | build | pack | download |
+share | mount | sync | serve | stop | status | logs | smoke | ncclcheck | gate`）。
+`start-tp4.sh` 只是个薄包装：它把 `ENV_FILE` 钉在 `.env.tp4` 上，然后转交
+`start.sh`。legacy 三机 profile（`.env` / `start.sh`）仍在树里，但**本版发布的
+每一个数字都不是在它上面测的**（选择逻辑见 `start.sh` 顶部的 `Profiles:` 块）。
+
+有两样东西没有哪个模板能给：
+- `PEER_HCA_RANK*` 布线表 —— 从一次 `NCCL_DEBUG=INFO` 首启里推（见 §8），或按
+  `.env.tp4.example` 里写的三步做
+- 权重本身 —— `MODEL_DIR` / `WORKER_MODEL_DIR*` 指向 `$HOME/NewModels/…`，
+  checkpoint 不随本仓分发
+
 ---
 
 ## 8. 脱敏说明与仓库状态

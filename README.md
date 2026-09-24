@@ -504,6 +504,32 @@ space-joined-with-trailing-newline form (`{{join .RootFS.Layers " "}}` piped int
 trap (`01ba4719c80b6fe9` = a **missing** image, not an identity), are in
 [BUILD-IDENTITY.md](BUILD-IDENTITY.md).
 
+### Bringing it up
+
+The image is only half of it — the launcher needs your cluster's four site keys
+first. On the first run it copies the template for you and tells you to edit it:
+
+```bash
+./start-tp4.sh doctor      # creates .env.tp4 from .env.tp4.example, then reports
+                           # connectivity + GPUs + checkpoint
+$EDITOR .env.tp4           # the 4 site keys: HEAD_IP / WORKER_IPS / WORKER_HOSTS / WORKER_USER
+./start-tp4.sh share       # head exports its checkpoint over NFSv4 on ConnectX
+./start-tp4.sh serve       # workers first, then head — API on :8899
+```
+
+`./start.sh help` prints the full subcommand list (`doctor | pull | build | pack |
+download | share | mount | sync | serve | stop | status | logs | smoke | ncclcheck |
+gate`). `start-tp4.sh` is a thin wrapper that pins `ENV_FILE=.env.tp4` and
+delegates to `start.sh`; the legacy 3-Spark profile (`.env`, `start.sh`) is still
+in the tree, but it is not the profile this release was measured on (see the
+`Profiles:` block at the top of `start.sh`).
+
+Two things no template can hand you:
+- the `PEER_HCA_RANK*` wiring map — derive it from a `NCCL_DEBUG=INFO` first boot
+  (§8) or from the three steps written inside `.env.tp4.example`
+- the weights — `MODEL_DIR` / `WORKER_MODEL_DIR*` point at `$HOME/NewModels/…`,
+  and the checkpoint is not distributed with this repository
+
 ---
 
 ## 8. Sanitization and repo status
