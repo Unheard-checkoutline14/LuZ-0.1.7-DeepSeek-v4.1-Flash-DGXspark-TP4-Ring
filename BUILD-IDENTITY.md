@@ -127,6 +127,29 @@ nodes — useful as a second, independent check:
 and warns on mismatch — a cheap way to catch "the image was baked from a different
 overlay set than this checkout".
 
+### Spot-check: hash three files *inside* a loaded image
+
+The identity above describes the layer list. To check **contents** without starting anything:
+`docker create` + `docker cp` + `docker rm` — never `docker run`, no GPU, no daemon surgery:
+
+```bash
+CID=$(docker create dsv41-sglang-optimized:0.2.8)
+docker cp "$CID:/opt/dsv41/boot.py" .
+docker cp "$CID:/opt/dsv41/adapter/librow_store.so" .
+docker cp "$CID:/sgl-workspace/sglang/python/sglang/kernels/ops/attention/flash_mla_sm120.py" .
+docker rm "$CID"
+md5sum boot.py librow_store.so flash_mla_sm120.py
+```
+
+| path inside the image | 0.2.8 / 0.2.8pre / 0.2.7 (all three identical) | 0.2.4 |
+|---|---|---|
+| `/opt/dsv41/boot.py` | `ad36d146376a71246ba0518e00636f33` | `a7381d95d1560a3b2363a34d222df064` |
+| `/opt/dsv41/adapter/librow_store.so` | `9c13d387b4a17c7fc1e000b22080889b` | `1f820aef687d0f9685c0e4b51585ece6` |
+| `.../attention/flash_mla_sm120.py` | `d91b0cda319e8a9b57e73e71020fb7bb` | same as above |
+
+The repository's `boot.py` is kept byte-identical to the image copy (`ad36d146…`): it had drifted
+once in the **other** direction (image newer than repository) and was re-synced from the image side.
+
 ---
 
 ## Software stack (inside the production image)
@@ -215,6 +238,91 @@ Engine state as reported on startup:
 `--served-model-name` is the **engine-side** name. Do not confuse it with the names
 exposed by the client-facing gateway — four distinct name strings are in play (image tag,
 gateway alias, engine self-report, upstream probe) and they are not interchangeable.
+
+---
+
+## What the 0.2.8 image ships (payload inventory)
+
+The whole 0.2.8 runtime delta lands in **one COPY layer** (`68a2b794…`, 593 KB) on top of the
+0.2.7 base — 11 modules. The file-level manifest, with per-file md5s and a recipe that extracts
+that layer straight out of the release archive, is in
+[`sglang-overlay/README.md`](sglang-overlay/README.md); per-item verdicts are in
+[RELEASE-NOTES-v0.2.8 §2](docs/release-notes/RELEASE-NOTES-v0.2.8.md).
+
+**Ten are runtime fixes**, all env-gated and default-off except one: K-gather double-strided view
+inside a page (363 → 53 MiB, equivalence 14/14 byte-exact) · FIX-D width bucketing · `mm_ban`
+two gates · #40217 native port · memory-attribution probe v2 · input-id deny-set · page-table /
+R1 / R2 width gates · FIX-B idle-release v2 — plus the #40352 candidate-block protocol backport
+(`DSV41_IDX_PROTOCOL`, **default 0**, so production behaviour is untouched by it).
+
+**The eleventh is the only deliberate default-behaviour change**: the v14 autotune vote
+(md5 `e6f4d696f70d7426aeb2fb9a653e23ba`). It changes what happens when ranks disagree about the
+FlashInfer tactics table — 1-vote adoption becomes a true-majority gate. The mechanism, and the
+quality gate a re-draw has to pass, are in the
+[autotune-golden runbook](docs/operators/AUTOTUNE-GOLDEN-RUNBOOK.md).
+
+**Deliberately excluded** — "what was left out" matters as much as "what went in": an internal
+smoke script whose source carries a hard-coded probe key, logs, `*.bak-*`, scratch state and
+`__pycache__`. Also **not** promoted: a revert whose A/B arm never met its recovery bar
+(~5000 t/s) — the 9/22 prefill regression it was meant to explain turned out to be a wedged GPU
+clock on one node, unrelated to that upstream change.
+
+> ⚠ The recipe is an **operator-side** build script: payload table inline, prerequisites asserted,
+> and — the part that matters — every payload file is read back **out of the built image** and
+> md5'd, never trusted from the staging tree. It is not shipped in this repository; the payload is
+> described here and enumerated file-by-file in the overlay manifest instead.
+
+---
+
+## Why layers, not flattening (2026-09-23)
+
+This project carried an **iron rule**: every image increment must be flattened
+(`docker create → cp → export → import --change`). 0.2.8 was built the other way
+(`FROM 0.2.7` plus two layers), so the retirement is written down here — an iron rule dropped
+without a recorded reason is one nobody can re-derive.
+
+- **The premise was a 125-layer ceiling.** 0.2.4 measured `len .RootFS.Layers = 125`, and the
+  classic-`overlay2` nodes refuse a deep chain outright (`max depth exceeded` on `docker load`).
+- **The premise had expired.** 0.2.7 had already been flattened to **1 layer**, so adding two
+  more is nowhere near the ceiling — 0.2.8 measures **3**.
+- **Layering buys two things flattening cannot**:
+  1. **Config is inherited.** Flattening has to re-create the entire config by hand through
+     `docker import --change`; one dropped `ENV` line yields a container that starts and is
+     silently missing a variable, with no error anywhere.
+  2. **LABELs become possible.** `start.sh` has always read `org.dsv41.overlay_files` to compare
+     the overlay-set length; no flattened image ever carried it, which surfaced as a permanent
+     warning. From 0.2.8 the six `org.dsv41.*` labels are present (anchors table above).
+- **Still binding**: build once, distribute with `docker save | ssh <host> docker load`, and
+  **never push to a registry** — four nodes must come out with the same content identity, and a
+  per-node build would be a bet on COPY-layer byte reproducibility.
+
+---
+
+## Reproducible bake (2026-09-23)
+
+**Identity is reproducible. `.Id` never is.** The comparison quantities are `content-identity` and
+the per-layer digests — not `.Id`, not the manifest-list digest (see the two warnings above).
+
+Three rules, all learned the hard way:
+
+1. **`built_at` is a pinned constant, not `date`.** The timestamp lands in the config, the config
+   digest lands in the image identity ⇒ a single `date` call inside the build makes every rebuild
+   a different image. `org.dsv41.built_at` is therefore the fixed `2026-09-23T00:00:00Z`, and the
+   staging tree is `mtime`-normalised (`touch -h -d …`) because the COPY tar records mtime and mode.
+2. **A rebuild must use the same tag.** The image's own `/opt/dsv41/BUILD-NOTICE.md` names the tag
+   it was built under, so rebuilding under a *different* tag legitimately produces a different
+   COPY layer and a different identity. That is not "not reproducible", that is a different
+   payload — which is also why rebuilding over an existing tag requires an explicit `FORCE=1`
+   instead of silently overwriting a distributed identity.
+3. **mtime normalisation fights BuildKit's staleness detection.** BuildKit decides whether a local
+   source changed from `(mtime, size)`; normalised mtimes make an edited file of the same size look
+   untouched, and the build quietly bakes the **old** bytes. The fix is a one-shot context
+   directory per build — and the reason it was caught at all is rule zero: the build md5s every
+   payload file **out of the finished image** (6/6) rather than trusting the staging tree.
+
+Measured on the 0.2.8pre build (same payload, same tag, `NOCACHE=1 FORCE=1` cold rebuild):
+`content-identity` came back **`b177409e539ea38e`** with all three layer digests identical — the
+third of them a **zero-byte layer**, i.e. the read-only AST syntax gate really does write nothing.
 
 ---
 

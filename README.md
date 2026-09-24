@@ -446,6 +446,8 @@ answered questions about *previous* forms and are not comparable with §2
   final metrics board, the [release notes](docs/release-notes/),
   [the env template ↔ production key-by-key](docs/CONFIG-v0.2.8-ENV.md),
   the [operator inventory & rollback ledger](docs/operators/) (§4's evidence base),
+  [the autotune-golden lock & rebuild runbook](docs/operators/AUTOTUNE-GOLDEN-RUNBOOK.md)
+  (why the FlashInfer tactics table is pinned, and the quality gate a re-draw has to pass),
   and [engineering-assurance reports](docs/engineering-assurance/) (the 0.2.8 matrix
   window + the DE SD-1 verdict, in their sanitized published form)
 

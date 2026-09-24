@@ -375,6 +375,8 @@ b12x 是消费级 Blackwell（SM120/SM121）的 CuTe-DSL 内核库：NVFP4/MXFP4
 - `docs/` — 部署方案、上游 ISSUE/PR 调研、基准横向对比、终版指标板、
   以及[版本更新报告](docs/release-notes/)、
   [算子全景清单与回退台账](docs/operators/)（§4 的证据底座）、
+  [autotune golden 锁定与重建规程](docs/operators/AUTOTUNE-GOLDEN-RUNBOOK.md)
+  （FlashInfer 战术表为何被钉住、以及重抽它必须先过的质量门）、
   与[工程保障报告](docs/engineering-assurance/)（0.2.8 矩阵窗 + DE SD-1 判决，均为脱敏发布版）
 
 ---

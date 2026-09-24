@@ -115,6 +115,20 @@ def main():
     with open(report, encoding="utf-8") as fh:
         published = parse(fh.read())
 
+    if not published:
+        # A report with no renderer markers compares against nothing, and the loop below
+        # would then print PASS over an empty comparison -- the same "green check that
+        # verified nothing" this script exists to prevent (see the renderer-detection note
+        # above, and the 2026-09-24 clean-clone audit that found this path). Reject the
+        # invocation instead of blessing it.
+        print("tables in report  : 0  (no `<!-- generated from ... -->` markers found)")
+        print("")
+        print("NOT COMPARABLE -- %s carries no renderer-generated tables, so" % report)
+        print("passing it here would compare nothing and still print PASS. Point this script")
+        print("at the report that quotes the renderer output verbatim, e.g.")
+        print("  docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md")
+        return 2
+
     fails = []
     print("tables in archive : %d" % len(generated))
     print("tables in report  : %d" % len(published))
