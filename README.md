@@ -42,7 +42,7 @@ Current production (what every number tagged *0.2.8* below was measured on):
 | image | `dsv41-sglang-optimized:0.2.8` — content identity **`4cca364c46778423`** (3 layers) ([BUILD-IDENTITY.md](BUILD-IDENTITY.md)) |
 | change vs 0.2.4 | **OOM-era engineering close-out** — FIX-B/B′ (idle release + scheduler snapshot hook), FIX-D (logits width bucketing), `mm_ban` (input-side id sampling mask), R2 page-table grid, #40352 candidate-block protocol (**default off**). Pure increment, nothing reduced |
 | context / KV pool / concurrency | 600,000 / 9,600,000 tokens / 16 |
-| chunk / EP / indexer | 8192 / EP2 / fp4 indexer on |
+| chunk / EP / indexer | 8192 / EP2 / fp4 indexer **off** — the production `.env.tp4` carries no `--enable-deepseek-v4-fp4-indexer` (grep count 0); see §4 for the history |
 | promotion gates (0.2.8 window) | PR 512K single-stream **> 4,500 t/s hard gate ✓** · 512K × C16 **16/16 ok** · zero OOM, memory flat after the 8.4M-token corner |
 | full doc | [docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md) |
 
@@ -135,7 +135,7 @@ publication (see [the archive README](data/luz028-matrix-20260923/README.md)).
 | metric | value | note |
 |---|---|---|
 | `:8001` gateway vs direct `:8899` | prefill **+0.9 %** · decode **−0.2 %** · wall **+0.3 %** | n=2 per arm — enough to exclude an order-of-magnitude penalty, **not** enough to exclude a single-digit-percent one ([§6](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)) |
-| fp4-indexer, 256-token budget, `code` | C1 **88.58** · C8 44.52 · C16 36.99 tok/s/req | **one arm only** — the indexer is on; the off arm needs a restart. Not an A/B ([§7](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)) |
+| fp4-indexer, 256-token budget, `code` | C1 **88.58** · C8 44.52 · C16 36.99 tok/s/req | **one arm only** — measured with the indexer **on** (v18 Form A); the off arm needs a restart. Not an A/B, and **not** the 0.2.8 production form ([§7](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)) |
 
 ### Headline figures
 
@@ -188,12 +188,23 @@ are in [benchmarks/README.md §3.1](benchmarks/README.md).
 | static verify mode | upstream compact/ragged mode trips an engram target-verify assertion on V4.1 (sgl-project/sglang#39173) |
 | `CHUNKED_PREFILL_SIZE=8192` (production since 0.2.8; was 4096) | what makes a 524288-token prompt fit at all — and the reason long-prompt prefill is serialized one request at a time. 8192 was first measured as a *benchmark-only* form on 2026-09-19 and promoted to the production `.env.tp4` (`.env.tp4:156`) in the 0.2.8 window; **every 0.2.8 cell** (§2) is at 8192, so a long-input prompt must be a multiple of 8192 to be comparable. See [benchmarks/README.md §3.2](benchmarks/README.md) and [FINAL-METRICS §1.4](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md) |
 
-**fp4 indexer (`--enable-deepseek-v4-fp4-indexer`) is ON** in Form A. It is an
-env-level switch and Form B runs with it off; the two forms are different
-configurations, so neither row should be quoted against the other. The A/B that would
-decide it needs a restart and is a window item
-([FINAL-METRICS §7](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md),
-[§11](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)).
+**fp4 indexer (`--enable-deepseek-v4-fp4-indexer`) is OFF in the 0.2.8 pinned
+production.** The production `.env.tp4` (`EXTRA_SGLANG_ARGS`; env md5 `3f6a014d`)
+does not contain the flag, so every row tagged *0.2.8* in this repo was measured
+with it **unset** — and FIX-D's logits-width bucketing is correspondingly *not on
+the path* (see the additions table above).
+
+History, kept so the two forms are not confused: **Form A** (2026-09-17 onward)
+ran with the indexer **on**. Its A/B (code-256, same protocol) measured
+c1 −6.4 % / c8 −0.9 % / c16 −3.3 % — a slight negative, kept knowingly at the
+time; the 0.2.8 pin dropped it. Form A and Form B (1 M ctx / 5 M pool / 12-way)
+are *different configurations* — neither should be quoted against the other.
+The one DE row in §2 labelled *fp4-indexer, 256-token budget* is an explicitly
+tagged **test arm** from the 2026-09-18 SD-1 window (v18 stack, not re-run on
+0.2.8), not the production form.
+
+⚠️ **Operational ban:** do not enable this flag without fixing the bucketing
+first — the current step is a 1024× over-allocation at the 2 K width.
 
 **One known regression, kept and disclosed:** c6 aggregate 260 → 236 (−9 %), an EP2
 side effect; c8/c12 rise far more.
@@ -379,8 +390,14 @@ answered questions about *previous* forms and are not comparable with §2
   checkpoint boot, smoke + warm-up
 - `adapter/` — SGLang patches (Engram row store C++, MXFP8 backend, shared-expert
   K pad, prefill cache hook)
-- `sglang-overlay/` — the fused DeepSeek-V4 decode operators grafted over the image's
-  sglang tree (Layer 2 above)
+- `sglang-overlay/` — **host overlay slot** for the fused DeepSeek-V4 decode operators
+  grafted over the image's sglang tree (Layer 2 above). It is consumed **only** in
+  development mode (`SGLANG_CODE_MOUNTS=1`); production (`=0`, the default) takes its
+  code from the image alone. ⚠️ This directory is **not** byte-synchronized with any
+  published image yet — to check the code that production actually runs, use the image
+  plus the per-file digests in
+  [RELEASE-NOTES §2.4](docs/release-notes/RELEASE-NOTES-v0.2.8.md). See
+  [`sglang-overlay/README.md`](sglang-overlay/README.md)
 - `b12x-site/` — vendored b12x CuTe-DSL kernel library (Layer 1 above)
 - `gateway/` — **streaming-aware concurrency proxy** (the `:8001` gateway in front of
   the engine): SSE heartbeat, TTFT budget, backpressure admission, equivalence
@@ -420,11 +437,14 @@ answered questions about *previous* forms and are not comparable with §2
   published figure is re-derivable from these files; [`data/README.md`](data/README.md)
   says how, and names the one column that is not
 - `.env.tp4.example` — the configuration this repo runs (sanitized template; the live
-  `.env.tp4` is gitignored)
+  `.env.tp4` is gitignored). Key-by-key comparison against the 0.2.8 production file,
+  the three image pins, and the 0.2.8 delta list:
+  [docs/CONFIG-v0.2.8-ENV.md](docs/CONFIG-v0.2.8-ENV.md)
 - `BUILD-IDENTITY.md` — image IDs, SGLang commit, component versions, artifact hashes,
   and the exact identity formula to check an image against
 - `docs/` — deployment plan, upstream ISSUE/PR survey, benchmark comparison, the
   final metrics board, the [release notes](docs/release-notes/),
+  [the env template ↔ production key-by-key](docs/CONFIG-v0.2.8-ENV.md),
   the [operator inventory & rollback ledger](docs/operators/) (§4's evidence base),
   and [engineering-assurance reports](docs/engineering-assurance/) (the 0.2.8 matrix
   window + the DE SD-1 verdict, in their sanitized published form)

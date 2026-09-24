@@ -39,7 +39,7 @@ English → **[README.md](README.md)** · 完整文档 → **[docs/](docs/)** ·
 | 镜像 | `dsv41-sglang-optimized:0.2.8` —— 内容身份 **`4cca364c46778423`**（3 层）（[BUILD-IDENTITY.md](BUILD-IDENTITY.md)） |
 | 对 0.2.4 的改动 | **OOM 期工程收口** —— FIX-B/B′（空闲释放 + 调度器快照钩子）、FIX-D（logits 宽度分桶）、`mm_ban`（输入侧专用 id 采样屏蔽）、R2 page_table 网格、#40352 候选块协议（**默认关**）。纯增量，无任何削减 |
 | 上下文 / KV 池 / 并发 | 600,000 / 9,600,000 token / 16 |
-| chunk / EP / indexer | 8192 / EP2 / fp4 indexer 开 |
+| chunk / EP / indexer | 8192 / EP2 / fp4 indexer **关** —— 生产 `.env.tp4` 不含 `--enable-deepseek-v4-fp4-indexer`（出现次数实测 0）；沿革见 §4 |
 | 提升门禁（0.2.8 窗口） | PR 512K 单流 **> 4,500 t/s 硬门 ✓** · 512K × C16 **16/16 ok** · 零 OOM、8.4M token 角落后内存持平 |
 | 完整文档 | [docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md) |
 
@@ -121,7 +121,7 @@ PR-v3 测的是压测真正关心的量：**从放行第一流到最后一流结
 | 指标 | 数值 | 说明 |
 |---|---|---|
 | `:8001` 网关 vs 直连 `:8899` | prefill **+0.9 %** · decode **−0.2 %** · wall **+0.3 %** | 每臂 n=2 —— 足以排除数量级差异，**不足以**排除个位数百分比差异（[§6](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)） |
-| fp4 indexer，256 token 预算，`code` | C1 **88.58** · C8 44.52 · C16 36.99 t/s/流 | **只有一条臂** —— indexer 当前开启；关闭臂需要重启。**不是 A/B**（[§7](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)） |
+| fp4 indexer，256 token 预算，`code` | C1 **88.58** · C8 44.52 · C16 36.99 t/s/流 | **只有一条臂** —— 测量时 indexer **开**（v18 形态 A）；关闭臂需要重启。**不是 A/B**，也**不是** 0.2.8 生产形态（[§7](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)） |
 
 ### 头部数字
 
@@ -169,11 +169,18 @@ PR-v3 测的是压测真正关心的量：**从放行第一流到最后一流结
 | static verify | 上游 compact/ragged 模式在 V4.1 上触发 engram target-verify 断言（sgl-project/sglang#39173） |
 | `CHUNKED_PREFILL_SIZE=8192`（0.2.8 起为生产现役；原 4096） | 它是 524288 token 提示词**能装下**的原因，也是长提示词 prefill **逐请求串行**的原因。8192 在 2026-09-19 先作为**基准形态**测量，0.2.8 窗口并入生产 `.env.tp4`（`.env.tp4:156`）；**§2 的每一格都在 8192 下测得**，因此长输入提示词必须是 8192 的整数倍才可比。见 [benchmarks/README.md §3.2](benchmarks/README.md) 与 [FINAL-METRICS §1.4](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md) |
 
-**fp4 indexer（`--enable-deepseek-v4-fp4-indexer`）在形态 A 下是开启的。** 它是 env 级开关，
-形态 B 则在关闭状态下运行；两者是**不同配置**，任何一行的数值都不该拿去和另一形态比。
-能判定它的 A/B 需要重启，属于窗口事项
-（[FINAL-METRICS §7](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)、
-[§11](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)）。
+**fp4 indexer（`--enable-deepseek-v4-fp4-indexer`）在 0.2.8 定板生产里是关闭的。**
+生产 `.env.tp4`（`EXTRA_SGLANG_ARGS`；env md5 `3f6a014d`）不含该 flag，因此本仓所有
+标注 *0.2.8* 的行都是在该 flag **未设**的前提下测得 —— FIX-D 的 logits 宽度分桶相应地
+**不在路径上**（见上方 0.2.8 additions 表）。
+
+沿革（保留以免两种形态被混引）：**形态 A**（2026-09-17 起）**开启**该 indexer。其 A/B
+（code-256，同口径）测得 c1 −6.4 % / c8 −0.9 % / c16 −3.3 % —— 轻微负向，当时知情保留；
+0.2.8 定板将其移出生产形态。形态 A 与形态 B（1 M ctx / 5 M 池 / 12 路）是**不同配置**，
+任何一行的数值都不该拿去和另一形态比。§2 中标注 *fp4 indexer，256 token 预算* 的那一行
+是 2026-09-18 SD-1 窗口（v18 栈，未在 0.2.8 重跑）里**明确标注的测试臂**，不是生产形态。
+
+⚠️ **运维禁令**：未先修好分桶之前，不得开启该 flag —— 现制在 2K 宽度上是 1024× 过分配。
 
 **唯一保留的已知回退**：c6 聚合 260 → 236（−9 %），EP2 的副作用；c8/c12 涨幅远大于此。
 
@@ -330,7 +337,7 @@ b12x 是消费级 Blackwell（SM120/SM121）的 CuTe-DSL 内核库：NVFP4/MXFP4
 
 - `start.sh / start-tp4.sh / stop.sh / boot.py` — 编排、锁修订版下载、冒烟 + 预热
 - `adapter/` — SGLang 补丁（Engram 行存储 C++、MXFP8 后端、共享专家 K padding、prefill 缓存钩子）
-- `sglang-overlay/` — graft 到镜像 sglang 树上的融合 DeepSeek-V4 decode 算子（上文第二层）
+- `sglang-overlay/` — **宿主覆盖位**：graft 到镜像 sglang 树上的融合 DeepSeek-V4 decode 算子（上文第二层）。它**只在开发模式**（`SGLANG_CODE_MOUNTS=1`）被消费；生产模式（`=0`，默认）代码只来自镜像。⚠️ 本目录**尚未**与任何已发布镜像逐字节同步 —— 要核对"生产实际跑的代码"，请以镜像为准，逐件摘要见 [RELEASE-NOTES §2.4](docs/release-notes/RELEASE-NOTES-v0.2.8.md)。详见 [`sglang-overlay/README.md`](sglang-overlay/README.md)
 - `b12x-site/` — vendor 的 b12x CuTe-DSL 内核库（上文第一层）
 - `gateway/` — **流式感知并发网关**（引擎前的 `:8001` 网关）：SSE 心跳、TTFT 预算、
   背压准入、等值去重、断连传播、`/gw/metrics`、可选 `enable_thinking` 注入，
@@ -361,7 +368,7 @@ b12x 是消费级 Blackwell（SM120/SM121）的 CuTe-DSL 内核库：NVFP4/MXFP4
   9/9 blob 摘要、层链解压校验、身份复现）。
   每一个公布的数字都能由这些文件复算——[`data/README.md`](data/README.md) 说明怎么复算，
   并**点名列出唯一一个不能复算的列**
-- `.env.tp4.example` — 本仓库实际运行的配置（脱敏模板；现网 `.env.tp4` 已 gitignore）
+- `.env.tp4.example` — 本仓库实际运行的配置（脱敏模板；现网 `.env.tp4` 已 gitignore）。与 0.2.8 生产 `.env.tp4` 的**逐键对照**、三处镜像 pin、以及 0.2.8 的改动清单见 [docs/CONFIG-v0.2.8-ENV.md](docs/CONFIG-v0.2.8-ENV.md)
 - `BUILD-IDENTITY.md` — 镜像 ID、SGLang commit、组件版本、发布件哈希，
   以及用于核对镜像的**内容身份公式**
 - `docs/` — 部署方案、上游 ISSUE/PR 调研、基准横向对比、终版指标板、
