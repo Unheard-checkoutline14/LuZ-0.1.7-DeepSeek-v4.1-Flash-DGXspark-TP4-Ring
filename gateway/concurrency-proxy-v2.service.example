@@ -40,6 +40,9 @@ Environment=DEDUP_ENABLE=1
 Environment=GW_API_KEY=
 # Enable thinking-chain injection only if your chat template needs it:
 Environment=INJECT_ENABLE_THINKING=0
+# Rewrite literal image placeholders to the engine-accepted plain-text form
+# (on by default; set 0 to forward request bodies untouched):
+Environment=SANITIZE_IMAGE_PLACEHOLDER=1
 
 # Drop-in overrides live in, e.g.:
 #   /etc/systemd/system/concurrency-proxy-v2.service.d/zz-tuning.conf

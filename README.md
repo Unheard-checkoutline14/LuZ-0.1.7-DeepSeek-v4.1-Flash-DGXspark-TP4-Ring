@@ -384,9 +384,13 @@ answered questions about *previous* forms and are not comparable with §2
 - `b12x-site/` — vendored b12x CuTe-DSL kernel library (Layer 1 above)
 - `gateway/` — **streaming-aware concurrency proxy** (the `:8001` gateway in front of
   the engine): SSE heartbeat, TTFT budget, backpressure admission, equivalence
-  dedup, disconnect propagation, `/gw/metrics`, optional `enable_thinking` injection.
-  Ships a sanitized `.env.example` (all 13 knobs documented) and a systemd unit
-  sample; no internal hostnames, ports or URLs
+  dedup, disconnect propagation, `/gw/metrics`, optional `enable_thinking` injection,
+  and image-placeholder sanitization — a client that serializes a past-turn image as
+  literal text would otherwise be answered with a hard `400` and a dead conversation.
+  Ships a sanitized `.env.example` (all 16 knobs documented), a systemd unit sample and
+  a 15-assertion unit test; no internal hostnames, ports or URLs. See
+  [`gateway/README.md`](gateway/README.md) for the lineage table and the equivalence
+  argument
 - `scripts/` — SSH helper, `verify/` probe kit, self-heal monitor + systemd unit,
   `gate.sh`, `nccl_selfcheck.sh`, `verify_release_artifact.py` (**offline** archive
   verifier: blob integrity + content identity, no cluster needed), and the three

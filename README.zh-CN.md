@@ -333,9 +333,11 @@ b12x 是消费级 Blackwell（SM120/SM121）的 CuTe-DSL 内核库：NVFP4/MXFP4
 - `sglang-overlay/` — graft 到镜像 sglang 树上的融合 DeepSeek-V4 decode 算子（上文第二层）
 - `b12x-site/` — vendor 的 b12x CuTe-DSL 内核库（上文第一层）
 - `gateway/` — **流式感知并发网关**（引擎前的 `:8001` 网关）：SSE 心跳、TTFT 预算、
-  背压准入、等值去重、断连传播、`/gw/metrics`、可选 `enable_thinking` 注入。
-  附脱敏后的 `.env.example`（13 个旋钮全部注释说明）与 systemd 单元样例；
-  不含内部主机名、端口与 URL
+  背压准入、等值去重、断连传播、`/gw/metrics`、可选 `enable_thinking` 注入，
+  以及图像占位符净化 —— 客户端把历史图像序列化成字面文本时，否则整请求会被硬 `400`
+  拒绝、会话即死。附脱敏后的 `.env.example`（16 个旋钮全部注释说明）、systemd 单元
+  样例与 15 项单测；不含内部主机名、端口与 URL。血缘表与等价性论证见
+  [`gateway/README.md`](gateway/README.md)
 - `scripts/` — SSH 助手、`verify/` 探针集、自愈监控 + systemd 单元、`gate.sh`、`nccl_selfcheck.sh`、
   `verify_release_artifact.py`（**离线**归档校验器：blob 完整性 + 内容身份，无需集群），
   以及三个仓库自检（`check_redaction.py`、`check_relative_links.py`、`check_report_tables.py`）

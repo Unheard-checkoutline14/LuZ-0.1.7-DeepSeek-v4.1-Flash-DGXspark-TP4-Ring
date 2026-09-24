@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-concurrency_proxy_v2.py — streaming-aware concurrency gateway for LLM inference
+"""concurrency_proxy_v2.py — streaming-aware concurrency gateway for LLM inference
 engines (OpenAI-compatible HTTP API).
 
 SPDX-License-Identifier: AGPL-3.0-or-later
@@ -18,15 +17,28 @@ Design highlights:
   G4 identical-in-flight retry suppression (body sha256 key -> 429)
   G5 client-disconnect propagation (cancels the upstream request)
   G6 observability (GET /gw/metrics, optional bearer auth via GW_API_KEY)
+  G7 image-placeholder sanitization (SANITIZE_IMAGE_PLACEHOLDER, default on):
+     some clients serialize a past-turn image as the engine's image special
+     token written out as literal text. An engine that validates its input
+     against such tokens rejects the body with a hard 400 and the conversation
+     is dead -- the image bytes are not in the request and cannot be restored.
+     The gateway rewrites the literal token to the plain text ``[图像]`` so the
+     request is accepted: a degradation bridge, not a repair (the client should
+     keep sending images as image_url / multimodal content blocks). The byte
+     fast path keys on the ASCII substring ``deepseek_image``, which is present
+     in both raw-UTF-8 and escaped (ensure_ascii) body forms.
 
 Streaming pipeline (four stages): atomic dedup placeholder -> early stream
 open + heartbeat -> producer (connect / first byte / TTFT budget / pump) runs
 in parallel with consumer (client write loop) -> drain and finalize.
 Everything after the early stream open fails closed into error frames followed
 by `data: [DONE]` -- the handler never raises past the stream open.
+Non-streaming responses are relayed with the same incremental discipline
+(read/write chunk by chunk, per-write timeout) instead of whole-body buffering.
 
 Timeout semantics:
   FIRST_TOKEN_TIMEOUT   time to first upstream byte (connect + read share it)
+  HEARTBEAT_INTERVAL    SSE keep-alive comment-frame interval while pending
   CHUNK_IDLE_TIMEOUT    max gap between upstream chunks after the first byte
   WRITE_TIMEOUT         max single write to a slow client (protects the
                         admission slot from being leaked by a stalled drain)
@@ -38,21 +50,31 @@ bodies that do not mention the key, inject
 chat_template_kwargs.enable_thinking=true before the dedup key is computed, so
 the key is stable across the on/off switch and identical bodies stay dedupable.
 
+Sanitization contract (G7): deterministic (same body -> same output); applied
+before enable_thinking injection and before the dedup key, so dedup keys are
+computed on the sanitized body and stay stable across the on/off switch; byte
+fast path (bodies without the trigger substring are never parsed); any body
+that cannot be sanitized safely -- invalid JSON, unencodable text, pathological
+nesting -- is passed through verbatim (fail-open: the upstream then returns its
+real 4xx, never a gateway 500). Counters live in /gw/metrics:
+image_placeholders_sanitized (occurrences) and image_sanitize_requests
+(requests actually rewritten).
+
 Deployment: one process between clients and the engine, e.g. clients -> :8001
-(gateway) -> :8002 (engine). A systemd unit example ships next to this file.
+(gateway) -> :8002 (engine). An env template, a systemd unit example and a unit
+test for the sanitizer ship next to this file.
 
 Environment variables (name = default):
   UPSTREAM=http://127.0.0.1:8002  PORT=8001  MAX_CONCURRENCY=6
   QUEUE_TIMEOUT=20   FIRST_TOKEN_TIMEOUT=600   CHUNK_IDLE_TIMEOUT=180
   HEARTBEAT_INTERVAL=5   RETRY_CONNECT=1   NONSTREAM_TOTAL_TIMEOUT=900
   WRITE_TIMEOUT=60   TOTAL_STREAM_TIMEOUT=7200   DEDUP_ENABLE=1   GW_API_KEY=
-  INJECT_ENABLE_THINKING=0
+  INJECT_ENABLE_THINKING=0   SANITIZE_IMAGE_PLACEHOLDER=1
 
 Security notes: GW_API_KEY unset leaves /gw/* unauthenticated (fine on a
 loopback-only deployment; set it otherwise). Comparisons use
 hmac.compare_digest. Error frames carry fixed strings; details go to logs only.
 """
-
 import asyncio
 import hashlib
 import hmac
@@ -79,7 +101,9 @@ DEDUP_ENABLE = os.environ.get("DEDUP_ENABLE", "1") == "1"
 GW_API_KEY = os.environ.get("GW_API_KEY", "")
 # enable_thinking 注入：默认 off——off = 现行为零变化
 INJECT_ENABLE_THINKING = os.environ.get("INJECT_ENABLE_THINKING", "0") == "1"
-VERSION = "concurrency-proxy-v2.0"
+# 图像占位符净化：默认 on；=0 回退现行为
+SANITIZE_IMAGE_PLACEHOLDER = os.environ.get("SANITIZE_IMAGE_PLACEHOLDER", "1") == "1"
+VERSION = "concurrency-proxy-v2-rc3.7.1"
 
 HEARTBEAT = b": keepalive\n\n"          # SSE 注释帧：OpenAI SDK/EventSource 忽略
 DONE_MARK = b"data: [DONE]\n\n"         # 错误帧后的终止符（SDK 正常收尾）
@@ -100,6 +124,7 @@ METRICS = {
     "first_token_timeouts": 0, "chunk_idle_timeouts": 0,
     "write_timeouts": 0, "stream_total_timeouts": 0,
     "upstream_errors": 0, "client_disconnects": 0,
+    "image_placeholders_sanitized": 0, "image_sanitize_requests": 0,
     "internal_retries": 0, "active_streams": 0, "queue_now": 0,
     "queue_wait_peak": 0.0,
     "ttft_buckets": {
@@ -204,6 +229,64 @@ def maybe_inject(body: bytes, path: str) -> bytes:
         return json.dumps(obj).encode()
     except Exception:
         return body                          # 非法 body：跳注入，走原转发逻辑
+
+
+# 图像占位符净化 ---------------------------------------------------
+# 客户端在后续轮次把历史图像序列化为字面文本 '<｜deepseek_image｜>'，引擎
+# encoding_dsv41._validate_no_image_sp_tokens 硬 400 → 会话被打断。图像字节
+# 不在请求里、无法复原 ⇒ 降级净化：占位符替换为 '[图像]'，请求放行。
+# 确定性变换，先于 maybe_inject 与 body_key（去重键对净化后 body 计算）；
+# 字节快路径：body 不含占位符字节串 ⇒ 零 parse 零开销；非法 JSON 原样返回。
+IMAGE_PLACEHOLDER = "<｜deepseek_image｜>"
+IMAGE_PLACEHOLDER_REPL = "[图像]"
+
+
+def sanitize_image_placeholders(body: bytes, path: str) -> bytes:
+    if not SANITIZE_IMAGE_PLACEHOLDER:
+        return body
+    if ("/chat/completions" not in path) and ("/responses" not in path):
+        return body
+    # 快路径触发器用 ASCII 子串而非占位符原始字节：客户端 JSON 常以
+    # ensure_ascii 转义传输（'｜'→'\uff5c'），原始 UTF-8 字节会漏判；
+    # 而占位符中的 ASCII 段 "deepseek_image" 在两种形态下都是字面字节。
+    # 误报（如提示词里提到该词）仅多一次 parse，walk 不命中即原样返回。
+    if b"deepseek_image" not in body:
+        return body                          # 快路径：绝大多数请求零成本直通
+    try:
+        obj = json.loads(body)
+    except Exception:
+        return body                          # 非法 body：不碰，走原转发逻辑
+    count = 0
+
+    def walk(o):
+        nonlocal count
+        if isinstance(o, str):
+            if IMAGE_PLACEHOLDER in o:
+                count += o.count(IMAGE_PLACEHOLDER)
+                return o.replace(IMAGE_PLACEHOLDER, IMAGE_PLACEHOLDER_REPL)
+            return o
+        if isinstance(o, list):
+            return [walk(x) for x in o]
+        if isinstance(o, dict):
+            return {k: walk(v) for k, v in o.items()}
+        return o
+
+    try:
+        obj = walk(obj)
+        if not count:
+            return body                      # 误报：零字节改动（快路径语义）
+        out = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    except Exception:
+        # fail-open 契约：孤立代理项 U+D800 → UnicodeEncodeError、深嵌套
+        # → RecursionError —— 任何无法安全净化的 body 一律原样透传
+        # （上游会给出真实的 4xx，而不是网关 500）。
+        return body
+    # 计数与日志只反映「实际完成净化」的请求（fail-open 放弃的不计）
+    METRICS["image_placeholders_sanitized"] += count
+    METRICS["image_sanitize_requests"] += 1
+    log.warning("rc3.7.1 sanitized %d image placeholder(s) on %s "
+                "(client serialized image as text)", count, path)
+    return out
 
 
 MAX_HASH_BYTES = 1 << 20                    # 只 hash 前 1MB（分块流式，防超大 body 全量驻留）
@@ -490,28 +573,53 @@ async def handle_stream(request: web.Request, body: bytes,
 
 # ---------------------------------------------------------------- 非流式
 async def relay_plain(request: web.Request, body: bytes,
-                      session: ClientSession) -> web.Response:
+                      session: ClientSession) -> web.StreamResponse:
+    # 流式转发：原实现「整包 await up.read() 后一次性 Response」把大响应
+    # （数百 KB 级）全量驻留网关内存且无背压（实测非流式劣化 +156%）；改为
+    # 随读随写：up.content.iter_any() → resp.write（单次写包
+    # asyncio.wait_for(WRITE_TIMEOUT)，与流式路径同语义）。开流前异常仍走原
+    # 502/504 JSON 分支；prepare 之后无法改写状态码，只能断连兜底。
+    resp = None
     try:
         async with session.request(              # 原方法转发（PUT/DELETE/OPTIONS 不破坏）
                 request.method, upstream_url(request), data=body,
                 headers=fwd_headers(request),
                 timeout=ClientTimeout(total=NONSTREAM_TOTAL_TIMEOUT)) as up:
-            return web.Response(status=up.status,
-                                content_type=up.content_type or "application/json",
-                                body=await up.read())
+            _skip = {"content-length", "transfer-encoding", "connection",
+                     "keep-alive", "te", "trailer", "upgrade"}
+            resp = web.StreamResponse(status=up.status, headers={
+                k: v for k, v in up.headers.items()
+                if k.lower() not in _skip})
+            await resp.prepare(request)
+            async for chunk in up.content.iter_any():
+                await asyncio.wait_for(resp.write(chunk), timeout=WRITE_TIMEOUT)
+            await asyncio.wait_for(resp.write_eof(), timeout=WRITE_TIMEOUT)
+            return resp
     except asyncio.TimeoutError:
         METRICS["upstream_errors"] += 1
-        return web.json_response(
-            {"error": {"message": f"gateway: upstream non-stream timeout "
-                                  f">{NONSTREAM_TOTAL_TIMEOUT:.0f}s",
-                       "type": "gateway_timeout"}}, status=504)
+        if resp is None:                          # 开流前：可安全回 504 JSON（原语义）
+            return web.json_response(
+                {"error": {"message": f"gateway: upstream non-stream timeout "
+                                      f">{NONSTREAM_TOTAL_TIMEOUT:.0f}s",
+                           "type": "gateway_timeout"}}, status=504)
+        log.warning("relay_plain mid-stream timeout %s %s",      # 开流后：断连兜底
+                    request.method, request.raw_path)
+        resp.force_close()
+        return resp
+    except ConnectionResetError:
+        if resp is not None:
+            resp.force_close()
+        raise                                     # 客户端断开 → dispatch 计数（原语义）
     except Exception as e:
         METRICS["upstream_errors"] += 1
         log.warning("relay_plain failed %s %s: %r",
                     request.method, request.raw_path, e)
-        return web.json_response(
-            {"error": {"message": "upstream connect failed",
-                       "type": "gateway_upstream"}}, status=502)
+        if resp is None:                          # 开流前：可安全回 502 JSON（原语义）
+            return web.json_response(
+                {"error": {"message": "upstream connect failed",
+                           "type": "gateway_upstream"}}, status=502)
+        resp.force_close()                        # 开流后：断连兜底
+        return resp
 
 
 async def relay_get(request: web.Request, session: ClientSession) -> web.Response:
@@ -567,6 +675,7 @@ async def dispatch(request: web.Request):
         session: ClientSession = request.app["client"]
         body = await request.read()
         if request.method == "POST":
+            body = sanitize_image_placeholders(body, request.path)  # 净化先于注入与去重键
             body = maybe_inject(body, request.path)   # 注入先于流式判定与去重键
         if request.method == "POST" and is_stream(body):
             return await handle_stream(request, body, session)
