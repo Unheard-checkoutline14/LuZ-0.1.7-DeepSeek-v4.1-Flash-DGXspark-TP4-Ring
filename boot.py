@@ -30,7 +30,7 @@ STATE = Path(os.environ.get('STATE_PATH', '/state'))
 PORT = int(os.environ.get('SERVER_PORT', '8888'))
 NNODES = int(os.environ.get('NNODES', '1'))
 NODE_RANK = int(os.environ.get('NODE_RANK', '0'))
-TP_SIZE = int(os.environ.get('TP_SIZE', os.environ.get('TP', '3')))
+TP_SIZE = int(os.environ.get('TP_SIZE', os.environ.get('TP', '4')))
 EP_SIZE = int(os.environ.get('EP_SIZE', str(TP_SIZE)))
 DIST_INIT_ADDR = os.environ.get('DIST_INIT_ADDR', '')
 SERVED_MODEL_NAME = os.environ.get('SERVED_MODEL_NAME', 'deepseek-v4.1-flash')
@@ -195,18 +195,34 @@ def warmup():
     if os.environ.get('WARMUP', '1') in ('0', 'off', 'false'):
         return
     started = time.monotonic()
+    # 0.2.7 (H4 follow-up): the warm-up verdict also lands in state/warmup.json
+    # so gate.sh can read a file instead of scraping container logs. The log
+    # lines above stay authoritative for humans; the JSON is for machines.
+    report = {'started_at': time.time(), 'model': PRIMARY_MODEL,
+              'sizes': [], 'batch': None}
     common = dict(model=PRIMARY_MODEL, temperature=0,
                   chat_template_kwargs={'thinking': False})
     filler = ('The quick brown fox jumps over the lazy dog near the riverbank '
               'while the sun sets slowly behind the distant hills. ')
-    sizes = [int(x) for x in os.environ.get('WARMUP_PROMPT_WORDS', '12,200,900,3600').split(',')]
+    # 12000-word tier ≈ 16K tokens: crosses the 8192-token chunk boundary, so a
+    # fresh engine warms the full-chunk + mixed-tail prefill path (and the
+    # DSV41_PREFILL_EMPTY_CACHE_TOKENS trigger) before the first real request.
+    # Third-party A-arm measured -31% on the first long cell when warmup
+    # stopped below the chunk tier (2026-09-20 cross-analysis, F1).
+    sizes = [int(x) for x in os.environ.get('WARMUP_PROMPT_WORDS', '12,200,900,3600,12000').split(',')]
     for words in sizes:
         prompt = (filler * (words // 20 + 1)) + 'Summarise the text above in one sentence.'
+        t0 = time.monotonic()
         try:
             request('/v1/chat/completions', dict(common, max_tokens=24,
                     messages=[dict(role='user', content=prompt)]), timeout=600)
+            report['sizes'].append({'words': words, 'ok': True,
+                                    'ms': round((time.monotonic() - t0) * 1000)})
         except Exception as exc:  # warm-up must never take the engine down
             print(f'warm-up prompt (~{words} words) failed: {exc}', flush=True)
+            report['sizes'].append({'words': words, 'ok': False,
+                                    'error': str(exc)[:200],
+                                    'ms': round((time.monotonic() - t0) * 1000)})
     batch = max(1, int(os.environ.get('MAX_RUNNING_REQUESTS', '4')))
     prompts = ['Explain how a hash table handles collisions in two sentences.',
                'List the steps of the TCP three-way handshake.',
@@ -221,8 +237,10 @@ def warmup():
         outcomes = list(pool.map(lambda p: _try_request(dict(common, max_tokens=48,
                                  messages=[dict(role='user', content=p)])), prompts[:batch]))
     garbled = []
+    batch_failures = 0
     for prompt, (error, text) in zip(prompts[:batch], outcomes):
         if error:
+            batch_failures += 1
             print(f'warm-up batch request failed: {error}', flush=True)
         elif not _looks_like_latin_prose(text):
             garbled.append((prompt, text))
@@ -238,6 +256,16 @@ def warmup():
               flush=True)
     print(f'Warm-up done in {time.monotonic() - started:.0f}s '
           f'({len(sizes)} prompt sizes + one batch of {batch})', flush=True)
+    report['batch'] = {'n': batch, 'failures': batch_failures,
+                       'garbled': len(garbled),
+                       'ok': batch_failures == 0 and not garbled}
+    report['ok'] = (all(s['ok'] for s in report['sizes'])
+                    and report['batch']['ok'])
+    report['total_s'] = round(time.monotonic() - started, 1)
+    try:
+        save('warmup.json', report)
+    except Exception as exc:  # never let bookkeeping kill the boot
+        print(f'warmup.json write failed: {exc}', flush=True)
 
 
 def _looks_like_latin_prose(text):

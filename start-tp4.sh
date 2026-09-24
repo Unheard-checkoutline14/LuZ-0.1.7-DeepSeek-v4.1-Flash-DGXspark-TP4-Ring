@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# start-tp4.sh — DeepSeek-V4.1-Flash on 4× DGX Spark (TP4/EP4).
+# start-tp4.sh — DeepSeek-V4.1-Flash on 4× DGX Spark (TP4; EP_SIZE from .env.tp4, currently 2).
 #
 # Same engine, image and commands as start.sh, with a profile of its own:
 #   .env.tp4      settings for this profile (copied from .env.tp4.example on first run)
@@ -12,7 +12,9 @@
 # Usage: ./start-tp4.sh doctor | build | share | pack | serve | stop | status | logs | smoke
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export ENV_FILE="$ROOT/.env.tp4"
+# 2026-09-21 白盒修正：无条件覆盖会吞掉版本切换靴的 ENV_FILE=.env.tp4-XXXtest
+# （静默切回 .env.tp4 的镜像=版本切换雷）
+export ENV_FILE="${ENV_FILE:-$ROOT/.env.tp4}"
 export ENV_EXAMPLE="$ROOT/.env.tp4.example"
 export STATE_DIR="${STATE_DIR:-$ROOT/state-tp4}"
 export LOG_DIR="${LOG_DIR:-$ROOT/logs-tp4}"

@@ -22,3 +22,11 @@ __pycache__/
 # runtime benchmark artifacts (per-stream records, engine logs). Added 2026-09-19:
 # may contain prompts / model outputs; published figures ship under data/ instead.
 bench-results/
+
+# investigation-arm env snapshots. Added 2026-09-24: start.sh's own recipe for
+# trying a different configuration is `cp .env.tp4 .env.tp4-<label>` and then
+# `ENV_FILE=.env.tp4-<label> ./start.sh ...`. The `.env.tp4.*` rule above uses a
+# dot, so those hyphenated copies were NOT ignored -- and a copy of .env.tp4
+# carries API_KEY. The rule below closes that path. (The deployment root has had
+# it since 2026-09-21; the omission was public-side only.)
+.env.tp4-*

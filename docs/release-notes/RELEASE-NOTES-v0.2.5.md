@@ -70,6 +70,9 @@
 ## 6. 治理与发布面
 
 - guards.conf pin → `0.2.5`（四机 md5 `04fe84d6e14a`）
-- start.sh / start-tp4.sh `IMAGE=` 默认 → `0.2.5`
+- ~~start.sh / start-tp4.sh `IMAGE=` 默认 → `0.2.5`~~ —— **2026-09-24 更正：本条未实际落地**。
+  部署根逐提交实测：`start.sh` 的默认值在本轮引用的 promote 提交 `0cc8c5c`（09-20）里**仍是
+  `0.2.4`**，直到 09-23 才改为 `0.2.7`；`start-tp4.sh` 全历史**从无 `IMAGE=` 行**。默认值的
+  完整沿革与后果见 [../CONFIG-v0.2.8-ENV.md §2](../CONFIG-v0.2.8-ENV.md)。
 - 网盘发布包**仍为 0.2.4**（`LuZ-0.2.4-dsv41-tp4-dgxspark.tar.zst`，内容身份
   `4ebef21b6aedbd70`）；0.2.5 发布件**尚未打包分发**，README §7 下载节如实标注

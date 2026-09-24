@@ -1,0 +1,37 @@
+# ============================================================================
+# 行尾策略 —— 2026-09-24
+#
+# 为什么需要这个文件：Git for Windows 安装时默认勾选 core.autocrlf=true。
+# 于是 Windows 观众 clone 下来的 shell 脚本是 CRLF 行尾，而这批脚本要被
+# scp 到 DGX Spark（Linux）上执行 —— 第一次运行就会失败，报错形如：
+#
+#     bash: ./start.sh: /bin/bash^M: bad interpreter: No such file or directory
+#
+#     （shell 把 \r 当成解释器路径的一部分）
+#
+# 已实测复现：不加本文件时，以 core.autocrlf=true clone 出来的 start.sh /
+# stop.sh / boot.py / Dockerfile 为**整文件 CRLF、无一行 LF**。加本文件后
+# 同样的 clone 得到 LF。
+#
+# 另一个更隐蔽的后果：.env.tp4.example 这类模板会被 `source`/`set -a` 读进
+# 环境，CRLF 会把值变成 `dsv41-sglang-optimized:0.2.8\r` —— docker 找不到
+# 这个镜像，而错误信息看起来像「镜像不存在」，不会指向行尾。
+#
+# 范围：只 pin「要在 Linux 上执行」或「要被 shell 解析」的类型。这里刻意
+# **不写** `* text=auto` 兜底 —— 加了兜底就会让 git 在所有平台统一改写
+# data/ 下归档物证（.json/.tsv/.md5/.log）的字节，而那些文件正是复现链的
+# 校验依据。未列出的类型因此保持使用者本地 autocrlf 的既有行为，与「本文件
+# 不存在」时完全一致 —— 即本文件只收紧，不扩大 git 的改写面。
+#
+# 已有旧 clone 的人若想就地修正（不影响新 clone）：git add --renormalize .
+# ============================================================================
+
+*.sh            text eol=lf
+*.py            text eol=lf
+Dockerfile      text eol=lf
+*.example       text eol=lf
+*.service       text eol=lf
+# 这两个没有扩展名，要单独点出来 —— 它们同样在 Linux 侧被工具解析
+# （docker build 读 .dockerignore；git 读 .gitattributes 自身）。
+/.gitattributes  text eol=lf
+/.dockerignore   text eol=lf

@@ -63,7 +63,8 @@ TP4 一律由 `.env.tp4` 显式提供。默认值只在两个 env 文件都缺�
 | 键 | 模板形态 | 说明 |
 |---|---|---|
 | `HEAD_IP` / `WORKER_IPS` / `WORKER_HOSTS` / `WORKER_USER` | 占位符 | 节点地址与账户 |
-| `MODEL_DIR` / `WORKER_MODEL_DIR{,_1,_2,_3}` / `COMMON_MODEL` / `ENGRAM_DIR` / `WORKER_DIR` | `$HOME/...` | 权重与工作目录布局 |
+| `MODEL_DIR` / `WORKER_MODEL_DIR{,_1,_2,_3}` / `ENGRAM_DIR` / `WORKER_DIR` | `$HOME/...` | 权重与工作目录布局 |
+| `COMMON_MODEL` | `/var/tmp/DeepSeek-V4.1-Flash` | 通用 staging 路径，与站点无关，故**不是**占位符 |
 | `ENG_SH47` / `ENG_SH48` | `$HOME/...` | Engram 两个本地分片的**路径**——⚠️ **本仓启动器不读它**（见下） |
 | `WORKER_EXTRA_MOUNTS_2` / `WORKER_EXTRA_MOUNTS_3` | `$HOME/...` | Engram 两个本地分片的挂载——**实际生效的那一路** |
 | `PEER_HCA_RANK0..3` | `<PINNING>` | **每 rank 的对端 HCA 对**；4 节点环网上它等价于物理布线图 |

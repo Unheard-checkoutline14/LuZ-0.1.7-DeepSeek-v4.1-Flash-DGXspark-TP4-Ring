@@ -1,5 +1,18 @@
 #!/usr/bin/env bash
-# start.sh — DeepSeek-V4.1-Flash on 3× DGX Spark (GB10 / SM121)
+# start.sh — DeepSeek-V4.1-Flash launcher for DGX Spark (GB10 / SM121)
+#
+# WHICH PROFILE THIS REPO SHIPS — 4x DGX Spark, TP4 / EP2:
+#   entry point      ENV_FILE=.env.tp4 ./start.sh serve    (or ./start-tp4.sh serve)
+#   config template  .env.tp4.example — the live .env.tp4 stays on the deployment
+#                    host, because it holds the API key
+#   Every published figure in this repository comes from this profile.
+#
+# The 3-Spark text below describes start.sh's **legacy dev profile** (.env, TP=3).
+# That code path still exists — one checkout can drive either fleet, and the
+# profile-selection block further down (search for "Profiles:") explains how the
+# two are chosen — but its IPs (10.0.0.1-3) and usernames (mia / zurih) belong to
+# an internal dev triangle, not to this repository. Same engine, same flags,
+# different fleet. Renaming those hosts in your own .env is expected.
 #
 # Upstream: https://github.com/0xSero/deepseek-v4.1-flash-4x-rtx-pro-6000
 #   4× RTX PRO 6000 Blackwell, TP4/EP4, native weights, NVMe Engram, DSpark.

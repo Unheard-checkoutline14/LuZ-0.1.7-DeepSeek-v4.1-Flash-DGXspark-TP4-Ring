@@ -1,21 +1,27 @@
 #!/usr/bin/env bash
-# stop.sh — tear down DeepSeek-V4.1-Flash SGLang on all 3 Sparks.
+# stop.sh — tear down DeepSeek-V4.1-Flash SGLang.
+#
+# Both profiles are covered (see start.sh's "Profiles:" block): this reads
+# ENV_FILE and defaults the same way start.sh does — .env.tp4 when present
+# (4 Sparks, TP4, the profile this repository ships), else .env (the legacy
+# 3-Spark dev triangle). The "spark1/spark2/spark3" wording below is that
+# legacy description; spark1 is its name for the head node.
 #
 # Stops:
-#   - dsv41-head on spark1 (rank 0 + API :8888)
-#   - dsv41-worker on spark2 and spark3
+#   - dsv41-head on the head node (spark1) — rank 0 + API :8888
+#   - dsv41-worker on the workers (spark2/spark3)
 #   - log-tail helper
 #   - leftover sglang.launch_server in those containers
 #
 # Keeps:
-#   - checkpoint on spark1
-#   - overlay image dsv41-3x-spark:local
+#   - checkpoint on the head node
+#   - the container image (its name is printed at the end; it comes from ENV_FILE)
 #   - shared NFSv4 exporter (vllm-fn-nfs) — Qwen/GLM still use it
 #   - docker volume dsv41-weights unless you pass --unmount
 #
 # Usage:
-#   ./stop.sh              stop serve on all 3 nodes
-#   ./stop.sh --unmount    also drop worker NFS volumes (weights stay on spark1)
+#   ./stop.sh              stop serve on every node named in ENV_FILE
+#   ./stop.sh --unmount    also drop worker NFS volumes (weights stay on the head)
 #   ./start.sh stop        same
 #
 set -uo pipefail
@@ -39,7 +45,13 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-ENV_FILE="${ENV_FILE:-$ROOT/.env}"
+# 2026-09-21 事故教训：默认 source 旧双机 .env（10.0.0.2/3 + zurih@spark2/3）⇒
+# 对现四机 TP4 集群（.env.tp4 的 WORKER_IPS 三台）worker 清理**静默空转**
+# （systemd ExecStop 不带 ENV_FILE 时必踩）。生产形态=.env.tp4 存在则优先。
+if [[ -z "${ENV_FILE:-}" ]]; then
+  if [[ -f "$ROOT/.env.tp4" ]]; then ENV_FILE="$ROOT/.env.tp4"
+  else ENV_FILE="$ROOT/.env"; fi
+fi
 if [[ -f "$ENV_FILE" ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -67,10 +79,15 @@ else
     WORKER_HOSTS+=("${!_v:-${WORKER_IPS[$_i]}}")
   done
 fi
-WORKER_USER="${WORKER_USER:-zurih}"
+# 2026-09-21：zurih 是旧双机集群账号；现集群 worker 同为当前用户，随 .env.tp4 走
+WORKER_USER="${WORKER_USER:-$USER}"
 SSH_IDENTITY="$(_abs "${SSH_IDENTITY:-$HOME/.ssh/id_ed25519_shared}")"
 NFS_VOLUME="${NFS_VOLUME:-dsv41-weights}"
-IMAGE="${IMAGE:-dsv41-3x-spark:local}"
+# 这个变量**只用于收尾打印**（文件末尾的 "kept:" 一行），不参与任何删除动作。
+# 所以这里不猜默认值：旧的 dsv41-3x-spark:local 属于 09-13 命名法，打印出来只会
+# 让人照它去 docker images 里找一个根本不存在的镜像。正常路径下 ENV_FILE
+# （默认 .env.tp4）已经给出真值；没有 env 时按「未 pin」如实说，不编。
+IMAGE="${IMAGE:-}"
 REMOTE_PY="${REMOTE_PY:-$ROOT/scripts/remote.py}"
 LOG_DIR="${LOG_DIR:-$ROOT/logs}"
 RM_TIMEOUT="${RM_TIMEOUT:-30}"
@@ -151,6 +168,32 @@ for h in "${WORKER_HOSTS[@]}"; do
 done
 
 echo
+# 2026-09-21 防静默：逐台复核 worker 容器真的没了。拓扑失配/ssh 失败时上面只
+# warn 一句就退（rc=0）——下游以为停干净了，下一靴 start 撞半死栈。残留 ⇒
+# exit 2 + 打印手动修复命令，宁可红脸。
+_failed_workers=()
+for h in "${WORKER_HOSTS[@]}"; do
+  # 审计 P1 修：赋值语句吃掉 remote_on 的 rc——worker 不可达时 _left 为空不入
+  # failed、打印 workers all clean（GPU 仍被占、systemd rc=0 收场）。ssh 失败本身
+  # 就是「未证实停干净」，按残留同级处理。
+  if ! _left="$(remote_on "$h" 'docker ps -a --format "{{.Names}}" | grep -E "^dsv41-" | tr "\n" " "' 2>/dev/null)"; then
+    _failed_workers+=("$h(ssh-fail:未证实停净)")
+    continue
+  fi
+  if [[ -n "$_left" ]]; then
+    _failed_workers+=("$h($_left)")
+  fi
+done
+if [[ "${#_failed_workers[@]}" -gt 0 ]]; then
+  err "worker 容器残留（stop 拓扑失配或 ssh 失败），手动修复后重跑："
+  for _f in "${_failed_workers[@]}"; do
+    err "  ssh ${_f%%(*} 'docker rm -f \$(docker ps -aq --filter name=dsv41-)'   # 残留: ${_f#*(}"
+  done
+  exit 2
+else
+  info "workers all clean: ${WORKER_HOSTS[*]}"
+fi
+
 if curl -sf --max-time 2 "http://127.0.0.1:${PORT}/v1/models" >/dev/null 2>&1 \
    || curl -sf --max-time 2 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
   warn "something is still answering on :${PORT}"
@@ -165,6 +208,6 @@ else
   info "no dsv41-* containers on head"
 fi
 
-info "kept: spark1 weights, $IMAGE overlay, vllm-fn-nfs exporter"
+info "kept: head-node weights, ${IMAGE:-<unpinned: no ENV_FILE loaded>} overlay, vllm-fn-nfs exporter"
 [[ "$UNMOUNT" == "1" ]] || info "worker NFS volume $NFS_VOLUME kept (./stop.sh --unmount to drop it)"
-info "start again with: ./start.sh"
+info "start again with: ENV_FILE=.env.tp4 ./start.sh serve   # 生产形态必须带 ENV_FILE"
