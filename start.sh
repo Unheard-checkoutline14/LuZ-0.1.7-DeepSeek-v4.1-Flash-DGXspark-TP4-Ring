@@ -42,6 +42,31 @@
 #
 set -euo pipefail
 
+print_usage() {
+  # Print this script's own header comment block.
+  #
+  # Was `sed -n '2,28p' "$0"` -- hard-coded line numbers that silently truncated
+  # the moment the header grew (by 13 lines, 2026-09-24: the usage list, which
+  # starts at line 26, fell outside the range). The first fix used `2,/^$/` and
+  # was *also* wrong: the header ends with a bare `#`, not a blank line, so the
+  # range ran on and swallowed the `set -euo pipefail` that follows it.
+  # "Every consecutive comment line from line 2" is the property we actually mean.
+  awk 'NR>1 && /^#/ { print; next } NR>1 { exit }' "$0" | tr -d '#'
+}
+
+usage() { print_usage; }
+
+# `help` must be reachable with zero side effects, so it is handled before
+# anything else runs. It used to fall through the whole ENV_FILE bootstrap:
+# it created .env in your working tree, ran the top-level key lint, and could
+# die on the chunk-tier gate before printing a single line -- while the
+# "unknown command" error further down tells people to run exactly this.
+# (Reported from a clean-clone walkthrough, 2026-09-24.)
+case "${1:-}" in
+  -h|--help|help)
+    print_usage; exit 0 ;;
+esac
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
@@ -1717,10 +1742,6 @@ cmd_smoke() {
 cmd_gate() {
   SERVER_PORT="$PORT" API_KEY_FILE="$STATE_DIR/api-key" \
     "$ROOT/scripts/gate.sh" "$@"
-}
-
-usage() {
-  sed -n '2,28p' "$0" | tr -d '#'
 }
 
 CMD="${1:-serve}"
