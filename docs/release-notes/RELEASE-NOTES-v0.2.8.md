@@ -70,6 +70,11 @@
 **计数：逐字节相同 3 件 · 净增 9 件 · 新增 3 件 ⇒ 纯增量，无一件缩减（0.2.4 的快路径全在）。**
 CED 跳层与 prefill-reuse 三件（前三行）**未被 0.2.8 触碰**。
 
+> **口径（引用前必读）**：右列（0.2.8）取自构建载荷表，并已在镜像 COPY 层内逐件复算
+> 通过；左列（0.2.4）取自交付快照 `v41-sglang-delivery/sglang-overlay/`。中间版本
+> （0.2.5–0.2.7）改过的文件会呈现**三个不同世代**的值 —— 见
+> [§2.4](#24-运行时代码来源与逐件核对)。
+
 ### 2.2 表二：0.2.8pre ↔ 0.2.8
 
 | 文件 | 0.2.8pre | 0.2.8 | 判词 |
@@ -85,7 +90,7 @@ CED 跳层与 prefill-reuse 三件（前三行）**未被 0.2.8 触碰**。
 
 | 组 | 内容 | 项数 |
 |---|---|---|
-| ① 运行期修复（overlay 谱系 → 镜像） | 10 件（含 #40352 三件） | 10 |
+| ① 运行期载荷（overlay 谱系 → 镜像） | 10 件修复 + 1 件默认行为变更（`flashinfer_autotune.py`） | 11 |
 | ② 仓库↔镜像一致性同步 | `gate.sh` / `boot-signature.sh` / `prv3_collector.py` | 3 |
 | ③ 工具载荷 → `/opt/dsv41/kit/` | 守卫套件 + 量具 + 文档 | 46 |
 | 合计（构建脚本 `--check` 回执） | 运行期 14 项 + 工具 46 项 | 60 |
@@ -96,6 +101,74 @@ CED 跳层与 prefill-reuse 三件（前三行）**未被 0.2.8 触碰**。
 - `sglang-overlay/configurer.py` 回退臂 —— 回退条件「本臂恢复 ~5000 t/s」未成立
   （09-22 定谳 prefill 回归真凶与 #39482 无关）⇒ 保留原版。
 - `*.bak-*` / 日志 / `state/` / `__pycache__` —— 历史与运行态，不进镜像。
+
+### 2.4 运行时代码来源与逐件核对
+
+**唯一事实源 = 构建脚本的两张载荷表**（`image-patches/0.2.8/build-0.2.8.sh` 的
+`PAYLOAD` / `KIT_LIST`）。§2.1–§2.2 的全部哈希都应由这两张表复现；本节把它落成
+**不需要集群**就能独立复算的形式。
+
+#### 0.2.8 镜像内的运行时代码（11 件）
+
+镜像 `dsv41-sglang-optimized:0.2.8`（内容身份 `4cca364c46778423`，3 层）的运行期改动
+全部落在 **COPY 层**（`blobs/sha256/68a2b794…`，593 KB）。逐件 md5：
+
+| 容器内路径（`/sgl-workspace/sglang/python/sglang/` 之下） | md5 |
+|---|---|
+| `srt/layers/attention/deepseek_v4_backend.py` | `610eb75c6f12d9ac3e623c0f7508442b` |
+| `srt/models/deepseek_v4.py` | `1472fcb122b24cbe2bd162ff3d12fafe` |
+| `srt/models/deepseek_v4_dspark.py` | `f1e2767cf05218e80e1509ef9c7fa409` |
+| `srt/layers/attention/dsv4/indexer.py` | `025e482971dfdb37c92ea92e44cb09fc` |
+| `srt/layers/attention/dsv4/candidate_indexer.py` | `97cf8acce87d947a3b8770d7c0772e9c` |
+| `srt/layers/attention/dsv4/dense_prefill_indexer.py` | `8c9c007e46fc93012d36a4aee1cb03ad` |
+| `srt/layers/attention/mqa_logits_utils.py` | `763779caee5b594bac760015ff88a105` |
+| `srt/managers/scheduler.py` | `3e64090646044b6502766b6f3933e3fd` |
+| `srt/mem_cache/deepseek_v4_memory_pool.py` | `f8f1fbe197d5872f563690461d7f98b3` |
+| `kernels/ops/attention/dsv4_attn_metadata_kernels.py` | `d6bbe7a6e83127b10a3706be18ff79cf` |
+| `srt/model_executor/runner/flashinfer_autotune.py` | `e6f4d696f70d7426aeb2fb9a653e23ba` |
+
+（另有 3 件组②同步载荷落在 `/opt/dsv41/` 下：`scripts/gate.sh`、`scripts/boot-signature.sh`、
+`benchmarks/prv3_collector.py`。）
+
+**自行核对**（任何机器，无需集群）：
+
+```bash
+TAR=LuZ-0.2.8-dsv41-tp4-dgxspark.tar
+L=blobs/sha256/68a2b7946f478f57fddd329e7df944ad855db405579aa4cadfdaae3b428229cd
+tar -xOf "$TAR" "$L" | tar -xz -C /tmp/l1 \
+  sgl-workspace/sglang/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+md5sum /tmp/l1/sgl-workspace/sglang/python/sglang/srt/layers/attention/deepseek_v4_backend.py
+# 期望 610eb75c6f12d9ac3e623c0f7508442b
+```
+
+#### 三处哈希口径，不要混用
+
+| 口径 | 对象 | 例（`deepseek_v4_backend.py`） |
+|---|---|---|
+| §2.1 表「0.2.4」列 | 交付快照 `v41-sglang-delivery/sglang-overlay/`（记的是 0.2.4 世代的值） | `f5d51f68` |
+| §2.1 表「0.2.8」列 = 载荷源 = **镜像 COPY 层** | 三处已实测逐字节一致 | `610eb75c` |
+| 0.2.7 基座层（L0）内 | 中间版本（0.2.5–0.2.7）改过的值 | `c40a6264` |
+
+**三者不同属正常** —— 它不是"同一文件的三个说法"，而是**三个不同世代的字节**。
+由此有两条推论，引用本表时必须知道：
+
+1. **§2.1 表的「逐字节相同」三件**（`prefill_reuse.py` / `schedule_batch.py` /
+   `forward_batch_info.py`）已在 0.2.7 基座层与 0.2.8 载荷两侧实测相等 ⇒ 声明成立。
+2. **`schedule_policy.py` / `configurer.py` / `server_args.py`** 在 §2.1 表里有 0.2.8 值，
+   但它们**不在** 0.2.8 载荷表内 —— 其 0.2.8 值由 0.2.7 基座层继承
+   （实测 `schedule_policy.py` 在基座层已是 `d4be0d41`）。改动发生在更早的中间版本，
+   不是 0.2.8 干的。
+
+#### ⚠️ 本仓 `sglang-overlay/` 与镜像不一致（已知，未修）
+
+本仓 `sglang-overlay/`（45 件，与 `start.sh` 的 `SGLANG_OVERLAY_MAP` 一一对应）是
+**开发模式（`SGLANG_CODE_MOUNTS=1`）的宿主覆盖位**，其内容截至 2026-09-24
+**未与任何已发布镜像同步**。生产模式（默认 `SGLANG_CODE_MOUNTS=0`）代码**只来自镜像**，
+本目录不参与；但以 `SGLANG_CODE_MOUNTS=1` 起栈会把旧字节覆盖到镜像上，而这类失效
+**任何缓存检查都看不出来**。
+
+⇒ **要核对"生产实际跑的代码"，请以镜像为准**（方法见上）。详见
+[`sglang-overlay/README.md`](../../sglang-overlay/README.md)。
 
 ## 3. OOM 期工程主线（0.2.5 → 0.2.8）
 
