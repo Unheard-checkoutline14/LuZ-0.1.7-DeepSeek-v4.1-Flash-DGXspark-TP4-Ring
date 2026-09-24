@@ -71,7 +71,7 @@ for publication; the code is not.
 
 | published in | `VERSION` string in the file | md5 (published file) | lines | corresponding deployment file |
 |---|---|---|---|---|
-| commit `01d5e8f` (v0.2.3 notes) | `concurrency-proxy-v2.0` | `dc4da4225cb04a4109988c0396b3aa1d` | 613 | pre-release snapshot, md5 `0606e1e24926d535e6f5dfdcc6fb57d3`, 649 lines |
+| commit `92631ea` (v0.2.3 notes) | `concurrency-proxy-v2.0` | `dc4da4225cb04a4109988c0396b3aa1d` | 613 | pre-release snapshot, md5 `0606e1e24926d535e6f5dfdcc6fb57d3`, 649 lines |
 | this tree | `concurrency-proxy-v2-rc3.7.1` | `705b746725c78b7f5e12ee0f5f199350` | 722 | the file the fleet runs, md5 `299332c1aaac5d38e7d0deb054b6869f`, 754 lines |
 
 Equivalence for the second row: `ast.dump()` of the two files is **byte-identical** once

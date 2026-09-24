@@ -1,6 +1,6 @@
 # Release notes — v0.2.3 (2026-09-19)
 
-**Baseline:** the previously published repo state (`main` @ `70a1d02`, image
+**Baseline:** the previously published repo state (`main` @ `d782830`, image
 `dsv41-sglang-optimized:v7`, content identity `4ebef21b6aedbd70`). This release does
 **not** change the image, and **not** the production launch args either (production
 `CHUNKED_PREFILL_SIZE` stays 4096; only the PR benchmark re-ran at 8192 — §3). What
@@ -9,7 +9,7 @@ commits land on `main`, the concurrency gateway is open-sourced, and the PR-v3
 matrix is re-measured in full (40/40 cells) at `--chunked-prefill-size 8192`.
 
 Fork association: these commits are linear extensions of the existing `main`
-history (cherry-picked from the internal ops line, rebased onto `70a1d02`), so
+history (cherry-picked from the internal ops line, rebased onto `d782830`), so
 existing forks can `git fetch && git merge main` or rebase as usual. No history
 rewrite, no force-push.
 
@@ -31,16 +31,16 @@ rewrite, no force-push.
 
 | commit | change |
 |---|---|
-| `5c3ecfd` | **b12x backport**: upstream E4M3 subnormal decode fix + MXFP8 swizzle bounds fix |
-| `c7f4ae8` | **perf(adapter)**: raw scale snapshots held once instead of per-use — reclaims ~4.3 GiB per rank at 600 K context |
-| `2070dab` | **feat(scheduler)**: per-request prefill share cap (idea from upstream #34554) — bounds what one long prompt can take from the co-running streams |
-| `318f951` | **fix(autotune)**: majority-vote across boot probes instead of discard-all (the slow-boot root cause: one slow probe used to void the whole table) |
-| `b6dddf3` | **feat(launcher)**: `CHUNKED_PREFILL_SIZE` validated against `{2048, 4096, 6144, 8192}` with MoE-ladder rung auto-append + numeric re-sort (a missing rung = HTTP 500 per the W5 precedent); NCCL env lint; gate.sh kernel guard + `/health`→`/v1/models` probe fix |
-| `645d879` | **fix(bench)**: GSM8K data path parameterized (`GSM8K_DATA`, see §5) + `gate.sh` layout-aware suite staging |
-| `d7210ed` | **feat(roce)**: RoCEv2 one-shot allreduce / allgather (`b12x comm.roce`, 11 files) — the ring transport used for the comm overlays |
-| `c7b3f5d` + `043232e` | chore: `bench-results/` runtime artifacts gitignored (conflict resolved, markers cleaned) |
-| `b3a229b` | audit: customer pitfall report P2 fixes + IMAGE tag alignment in `gate.sh` |
-| `01d5e8f` | **feat(gateway)**: open-source pass of the concurrency proxy (§2) |
+| `8938fd4` | **b12x backport**: upstream E4M3 subnormal decode fix + MXFP8 swizzle bounds fix |
+| `e03e0ae` | **perf(adapter)**: raw scale snapshots held once instead of per-use — reclaims ~4.3 GiB per rank at 600 K context |
+| `361a779` | **feat(scheduler)**: per-request prefill share cap (idea from upstream #34554) — bounds what one long prompt can take from the co-running streams |
+| `ef90434` | **fix(autotune)**: majority-vote across boot probes instead of discard-all (the slow-boot root cause: one slow probe used to void the whole table) |
+| `fd7176a` | **feat(launcher)**: `CHUNKED_PREFILL_SIZE` validated against `{2048, 4096, 6144, 8192}` with MoE-ladder rung auto-append + numeric re-sort (a missing rung = HTTP 500 per the W5 precedent); NCCL env lint; gate.sh kernel guard + `/health`→`/v1/models` probe fix |
+| `2345bee` | **fix(bench)**: GSM8K data path parameterized (`GSM8K_DATA`, see §5) + `gate.sh` layout-aware suite staging |
+| `9675ada` | **feat(roce)**: RoCEv2 one-shot allreduce / allgather (`b12x comm.roce`, 11 files) — the ring transport used for the comm overlays |
+| `f947e4c` + `10749ef` | chore: `bench-results/` runtime artifacts gitignored (conflict resolved, markers cleaned) |
+| `7c86edd` | audit: customer pitfall report P2 fixes + IMAGE tag alignment in `gate.sh` |
+| `92631ea` | **feat(gateway)**: open-source pass of the concurrency proxy (§2) |
 
 All touched shell files pass `bash -n`, all touched Python files pass
 `py_compile`; the full check log ships with the release audit.
@@ -130,7 +130,7 @@ superseded 2026-09-19 (`data/prv3-20260918/`); **current = `data/prv3-v14-202609
 
 ## 5. Redaction measures
 
-- **The one blocker-class leak is fixed at the source** (`645d879`): `bench/gsm8k_dsv41.py`
+- **The one blocker-class leak is fixed at the source** (`2345bee`): `bench/gsm8k_dsv41.py`
   had the operator's home directory baked in; the data path is now
   `GSM8K_DATA`-environment-driven with a generic default.
 - The gateway open-source pass is described in §2; its three files and both example

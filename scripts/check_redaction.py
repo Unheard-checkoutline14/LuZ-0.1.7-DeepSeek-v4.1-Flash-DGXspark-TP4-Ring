@@ -47,7 +47,7 @@ Scanning discipline (learned the hard way, repeatedly)
 - **The pattern list is inside the scan target, and nobody noticed for six days.**
   The two credential classes were written *literally*, so this file published the
   operator's sudo password and a token to everyone who cloned the repository --
-  from `f08f5a5` (2026-09-18) until 2026-09-24.  The scanner could not report it:
+  from `7259fee` (2026-09-18) until 2026-09-24.  The scanner could not report it:
   `\b` is itself a word character, so in the literal text `<value>` wrapped in
   `\b` on both sides the boundary after the leading escape never exists, and the
   pattern can never match its own definition.  A pattern that hides from itself is
@@ -275,7 +275,7 @@ def selftest():
     # this file published them to everyone who cloned the repository; and because
     # `\b` is itself a word character, the pattern could not match its own
     # definition, so the scanner reported zero credential hits across 28 files and
-    # PASSED.  Exposure ran from f08f5a5 (2026-09-18) to this fix.
+    # PASSED.  Exposure ran from 7259fee (2026-09-18) to this fix.
     #
     # Assert both halves, always.  Half one alone would be satisfied by deleting
     # the class; half two alone is what was already believed to be true.

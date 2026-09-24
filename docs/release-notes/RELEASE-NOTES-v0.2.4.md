@@ -3,7 +3,7 @@
 Appended-form release report. All other documents in this release are overwritten
 in place, per repo convention.
 
-**Baseline:** the previously published repo state (`main` @ `db8c572`, tag `v0.2.3`,
+**Baseline:** the previously published repo state (`main` @ `0663769`, tag `v0.2.3`,
 image content identity `4ebef21b6aedbd70`). This release does **not** change the
 image — the two engineering commits land on `main` and the operator documentation
 is refreshed. The headline change is a **correction**: the MoE b12x default that
@@ -15,8 +15,8 @@ regression it caused.
 
 | commit | area | what changed |
 |---|---|---|
-| `89a74f7` | function-call | **Port of vLLM #52645 truncation semantics to the DSML detectors** (`sglang-overlay/deepseekv32_detector.py`, new; `deepseekv41_detector.py`, v41 subclass with zero parse override; `start.sh` overlay map +2 entries). Three guarantees for DeepSeek-V3.2/V4.1 DSML tool-call streaming: (1) **no half-commit** — the invoke name is emitted only when its block completes, so a `max_tokens` truncation yields zero tool_calls instead of an empty-args call; (2) **finish() flush** — un-parsed buffer at stream end returns to content (was silently discarded) with full DSML structural-token stripping; (3) **anti-double-emit** — the preamble offset resets after buffer consumption so it never slices into the trailing closer. Offline stub suite 13/13. |
-| `7161bc7` | MoE | **`adapter/moe_b12x.py`: W4A8 default + safe hybrid fallback gating.** The production default stays `DSV41_MOE_B12X_QUANT=a8` with the full-b12x MMAX, but the docstring now carries the real per-M bake-off numbers (see §2), and the MMAX→FlashInfer hybrid route is **gated behind `DSV41_MOE_B12X_DUAL_HOLD=1`** — it must not arm under single-hold, where it silently corrupts large-M KV (§2). |
+| `b0f40ca` | function-call | **Port of vLLM #52645 truncation semantics to the DSML detectors** (`sglang-overlay/deepseekv32_detector.py`, new; `deepseekv41_detector.py`, v41 subclass with zero parse override; `start.sh` overlay map +2 entries). Three guarantees for DeepSeek-V3.2/V4.1 DSML tool-call streaming: (1) **no half-commit** — the invoke name is emitted only when its block completes, so a `max_tokens` truncation yields zero tool_calls instead of an empty-args call; (2) **finish() flush** — un-parsed buffer at stream end returns to content (was silently discarded) with full DSML structural-token stripping; (3) **anti-double-emit** — the preamble offset resets after buffer consumption so it never slices into the trailing closer. Offline stub suite 13/13. |
+| `21006a9` | MoE | **`adapter/moe_b12x.py`: W4A8 default + safe hybrid fallback gating.** The production default stays `DSV41_MOE_B12X_QUANT=a8` with the full-b12x MMAX, but the docstring now carries the real per-M bake-off numbers (see §2), and the MMAX→FlashInfer hybrid route is **gated behind `DSV41_MOE_B12X_DUAL_HOLD=1`** — it must not arm under single-hold, where it silently corrupts large-M KV (§2). |
 
 ## 2. The large-M b12x correction (why two docs changed)
 
@@ -53,7 +53,7 @@ dominates this deployment's traffic. The correct split is workload-shaped:
 An earlier same-day attempt to enable the hybrid under single-hold was caught
 by the needle quality gate (large-M chunk KV pollution; see
 [the regression analysis](../operators/V41-B12X-LARGEM-REGRESSION-ANALYSIS-20260919.md))
-and is the direct reason for the dual-hold gate in `7161bc7`.
+and is the direct reason for the dual-hold gate in `21006a9`.
 
 ## 3. Operator documentation (new)
 
