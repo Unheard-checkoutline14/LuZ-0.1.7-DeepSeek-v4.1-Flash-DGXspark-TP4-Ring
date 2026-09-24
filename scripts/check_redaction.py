@@ -4,8 +4,9 @@
 
 Why this exists
 ---------------
-`deliverables/engineering-assurance/sanitize_release.py` is a *masker*: it walks a
-release copy and applies a replacement table.  That table covers credentials, IPs,
+`deliverables/engineering-assurance/sanitize_release.py` (a deployment-side tool,
+not shipped in this repository) is a *masker*: it walks a release copy and applies
+a replacement table.  That table covers credentials, IPs,
 hostnames, the application user and one path prefix.  It has **no entry for the
 network interface / HCA classes** -- the very classes the 2026-09-17 release audit
 marked "must mask" in its section 3.2.1, including the per-rank `PEER_HCA` pinning

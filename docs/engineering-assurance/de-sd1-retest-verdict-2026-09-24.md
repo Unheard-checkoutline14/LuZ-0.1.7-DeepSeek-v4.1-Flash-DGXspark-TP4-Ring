@@ -114,10 +114,10 @@
 
 ## 📚 来源
 
-- 重测产物：`deliverables/engineering-assurance/de-sd1-retest-20260924/`（24 件，`MANIFEST.md5` 24/24 OK；含 `de_v3_matrix.json`、20 格 raw、`run.log`、`preflight.txt`、`COMPLETE`）
-- 复算脚本：同目录 `compare_vs_024.py`（fail-closed；本报告全部数字由其输出）
-- 0.2.4 基线：`_v41_r2/clean-clone/data/dev3-v18-20260920/de_v3_matrix.json`
-- 服务器现场：`01:<deploy-root>/state/de-v3-LUZ028_DE_SD1_20260924/`
+- 重测产物：`deliverables/engineering-assurance/de-sd1-retest-20260924/`（24 件，`MANIFEST.md5` 24/24 OK；含 `de_v3_matrix.json`、20 格 raw、`run.log`、`preflight.txt`、`COMPLETE`）——**部署侧工作树对象，不随本仓分发**
+- 复算脚本：同目录 `compare_vs_024.py`（fail-closed；本报告全部数字由其输出；同为部署侧对象）
+- 0.2.4 基线：[`data/dev3-v18-20260920/de_v3_matrix.json`](../../data/dev3-v18-20260920/de_v3_matrix.json)（**本仓内**，20 格全量）
+- 服务器现场：`01:<deploy-root>/state/de-v3-LUZ028_DE_SD1_20260924/`（部署侧）
 
 > 本报告由工程保障团队 AI 协作生成，关键决策请由人类工程负责人复核。
 

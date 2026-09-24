@@ -126,7 +126,7 @@ be60d09edf9d1391d141655a90f9304cbf2770e8f379fc2bf8f9d2be8dfd9816
 
 | 量具 | 路径 | 行数 | md5 |
 |---|---|---:|---|
-| PR（时代量具） | `state/prv3_collector.py` | 236 | `bbda3e75661d25e58a7d43fb069d1674` |
+| PR（时代量具） | `state/prv3_collector.py`（部署侧；= 本仓 [`bench/prv3_collector.py`](../../bench/prv3_collector.py)，同 md5） | 236 | `bbda3e75661d25e58a7d43fb069d1674` |
 | DE（时代量具） | `w6-kit/w41_de_triage.py` | 128 | `67859093dbd2529ba916dfa46852f6fe` |
 | 编排器冻结件 | `state/luz028/runs/<TAG>/luz028_matrix_4k_512k.sh` | 528 (29072 B) | `3eb5f523d7242b59a5453187bcbea779` |
 | `de_margin_row()` 提取段 | （本报告独立复核用） | 31 | `c63ed3f26a90f0c735c9289747d84596` |
@@ -466,11 +466,18 @@ prose 门禁 45，实测 min 51.5（余量 +14.44%）——**门禁远离分布�
 
 ## 📚 数据来源 & 成员产出索引
 
+> 📌 **路径口径**：本节混写**部署侧路径**与仓内路径。`node-01:<deploy-root>/…`、
+> `state/…`、`~/…`、`deliverables/…`、`w6-kit/…` 是部署宿主与工程保障工作树上的对象，
+> **不随本仓分发**——保留它们是为了给每个数字留出处（provenance）。可独立核对的
+> 是：`data/luz028-matrix-20260923/`（40 格归档与 `TABLE.md`）、`data/luz028-de-sd1-20260924/`
+> （DE 20 格）、以及 `bench/`、`benchmarks/` 下的量具与渲染器源码。
+
+
 - **权威跑产物根**：`node-01:<deploy-root>/state/luz028-artifacts/LUZ028_MATRIX4K512K_20260923T150740Z/`
   - `STATUS.tsv`（50 行）、`SUMMARY.md`（8675 B）、`run.log`、`engine-idle.log`
   - `pr/pr-<cell>/{RUN.json,TABLE.md,COMPLETE,<cell>-w0.json}` × 40
   - `de-<type>-c1-r<k>-2048.log` × 10
-- **编排器冻结件**：`state/luz028/runs/LUZ028_MATRIX4K512K_20260923T150740Z/luz028_matrix_4k_512k.sh`（528 行 / 29072 B / md5 `3eb5f523d7242b59a5453187bcbea779`）
+- **编排器冻结件**：`node-01:<deploy-root>/state/luz028/runs/LUZ028_MATRIX4K512K_20260923T150740Z/luz028_matrix_4k_512k.sh`（528 行 / 29072 B / md5 `3eb5f523d7242b59a5453187bcbea779`）
 - **基准窗（跨窗对照源）**：`~/V41-PR5000-CALIBER-VERDICT-20260923.md` **L57–L58 / L125**（交接书）
 - **配套**：`~/V41-LUZ028-CLOSEOUT-PLAN-20260923.md`（12801 B）
 - **Rex（SRE 工程师）原始产出**：盯守时序、`de_margin_row()` 零差异复核、镜像身份独立复现、Task F 导出记录（**待回收**）

@@ -57,7 +57,7 @@ plus the new `image_sanitize_requests` key.
 - real client traffic has resumed: `POST /v1/chat/completions` from a CLI client
   (version 5.6.2) returns **200** (13,874 B).
 
-## 3. End-to-end probes (`max_tokens=16`, key from `state/api-key`, target `127.0.0.1:8001/v1/chat/completions`) — ✅ 6/6
+## 3. End-to-end probes (`max_tokens=16`, key from the deployment-side `state/api-key`, target `127.0.0.1:8001/v1/chat/completions`) — ✅ 6/6
 
 | probe | construction | observed | verdict |
 |---|---|---|---|

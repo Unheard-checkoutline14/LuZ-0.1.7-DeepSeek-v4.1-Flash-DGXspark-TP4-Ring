@@ -47,8 +47,8 @@ directory on the head node carries each stage's start, exit code and elapsed tim
 | `fp4_256/` | fp4-indexer short-output arm, 256-token budget, `code` type, C=1/8/16 | ✅ complete (**one arm**: the indexer is on) |
 | `gw/` | `:8001` gateway vs direct `:8899`, three arms (prefill / decode / wall), `ROUNDS=2` | ✅ complete |
 | `pr/` | prompt-rate matrix (PR-v2), 6 input sizes × 5 concurrencies = 30 cells + 5-cell supplement — **withdrawn 2026-09-18**: no cache flush between cells, parallel-vs-queued indistinguishable, per-stream columns. Kept for audit, **numbers must not be quoted** (superseded three times over — current archive: `luz028-matrix-20260923/`) | ⚠️ withdrawn |
-| `cache/` | what a repeated prompt is worth, at 2 k / 32 k / 131 k — prices the nonce defect | ⏳ not yet run |
-| `channel/` | chat vs native `/generate`, same unconstrained prompt, alternated within each wave | ⏳ not yet run |
+| `cache/` | what a repeated prompt is worth, at 2 k / 32 k / 131 k — prices the nonce defect | ⛔ owner-cancelled (2026-09-18), no archive |
+| `channel/` | chat vs native `/generate`, same unconstrained prompt, alternated within each wave | ⛔ owner-cancelled (2026-09-18), no archive |
 | `TABLES.generated.md` | every table of FINAL-METRICS §2–§8, rendered straight from this directory by `../benchmarks/render_report_tables.py`. Re-run that command to check the report byte for byte | regenerated as stages land |
 
 > The `grammar/` archive above is the **second** pass: the first one wrote no per-stream
@@ -326,3 +326,8 @@ agree. The third line is why `structured` C1 cannot be compared with anything.
   `prompt_tokens`. Read the field, not the name.
 - **A row-to-row difference smaller than the row's own wave spread is not resolvable by
   that table.** This applies to every table in this repository.
+- **Deployment-side paths are markers, not links.** Paths such as
+  `node-01:<deploy-root>/state/…`, `~/V41-….md`, `deliverables/…`, `state/…` and
+  `w6-kit/…` in reports and release notes record **where a number was produced** on the
+  deployment host. They are kept for provenance and are **not shipped here**; the
+  auditable surface is `data/` itself plus the harnesses under `benchmarks/` and `bench/`.

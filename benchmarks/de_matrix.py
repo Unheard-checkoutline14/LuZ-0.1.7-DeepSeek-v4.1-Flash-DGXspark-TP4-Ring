@@ -4,7 +4,11 @@
 
 This is the harness behind `data/de-freeform-20260917/` (15 cells: 3 task shapes
 x 5 concurrencies) and therefore behind the DE half of section 3 of
-`docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md`.
+`docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md`.  Note the archive
+itself is **not shipped in this repository** — the DE material published here is
+the SD-1 re-measurement under `data/luz028-de-sd1-20260924/` plus the 0.2.4
+baseline under `data/dev3-v18-20260920/`; this harness is kept for the record of
+how the free-form generation was produced.
 
 Method
 ------

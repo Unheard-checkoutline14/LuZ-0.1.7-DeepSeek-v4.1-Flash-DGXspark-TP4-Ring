@@ -93,6 +93,16 @@ CED 跳层与 prefill-reuse 三件（前三行）**未被 0.2.8 触碰**。
 | ① 运行期载荷（overlay 谱系 → 镜像） | 10 件修复 + 1 件默认行为变更（`flashinfer_autotune.py`） | 11 |
 | ② 仓库↔镜像一致性同步 | `gate.sh` / `boot-signature.sh` / `prv3_collector.py` | 3 |
 | ③ 工具载荷 → `/opt/dsv41/kit/` | 守卫套件 + 量具 + 文档 | 46 |
+
+> **组② 3 件的镜像内实件**（从发布 tar 的 COPY 层 `blobs/sha256/68a2b794…` 离线抽取，
+> 抽取法见 §2.4「自行核对」）：`scripts/gate.sh` `c2eb49b19182007be305118950c11ad7`
+> （629 行）· `scripts/boot-signature.sh` `ab3106407027ec5303db10e34bdca0b0`（180 行）·
+> `benchmarks/prv3_collector.py` `bbda3e75661d25e58a7d43fb069d1674`（236 行）。
+> 本仓同名文件的对照：`scripts/boot-signature.sh` 与 `bench/prv3_collector.py` 与镜像内
+> **逐字节相同**；`scripts/gate.sh` 逻辑相同，唯一差异是**节点主机名按发布纪律配置化**
+> （从 `.env.tp4` 的 `WORKER_HOSTS` 读、缺省为占位符，见 `scripts/check_redaction.py`
+> 的 hostname 类别）——镜像内版本读不到你的集群时也须同样替换。
+
 | 合计（构建脚本 `--check` 回执） | 运行期 14 项 + 工具 46 项 | 60 |
 
 **明确排除**（「排除了什么」与「装了什么」同等重要）：
@@ -107,6 +117,12 @@ CED 跳层与 prefill-reuse 三件（前三行）**未被 0.2.8 触碰**。
 **唯一事实源 = 构建脚本的两张载荷表**（`image-patches/0.2.8/build-0.2.8.sh` 的
 `PAYLOAD` / `KIT_LIST`）。§2.1–§2.2 的全部哈希都应由这两张表复现；本节把它落成
 **不需要集群**就能独立复算的形式。
+
+> 📌 **该构建脚本是部署宿主上的构建对象，不随本仓分发**；本节与 §2.3 出现的
+> `image-patches/…`、`instruments/…`、`state/…` 同理——保留是为了给每个数字留出处
+> （provenance），**不是**让读者去找。读者侧的可核对面 = **发布 tar 本身**：按本节末尾
+> 配方对 `LuZ-0.2.8-dsv41-tp4-dgxspark.tar` 离线复算，下表每个哈希都可逐件复核；
+> 组② 3 件的镜像内实件 md5 亦按同法抽出，列在 §2.3 表后。
 
 #### 0.2.8 镜像内的运行时代码（11 件）
 

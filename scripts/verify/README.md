@@ -15,4 +15,6 @@ ramp drivers run on the head.
 - `throughput.py`: greedy and sampled throughput at concurrency 1-4 (usage-based).
 - `idle_drift.sh` (head): MemAvailable every 30 s for 10 minutes.
 
-Raw outputs of the 2026-09-11 boots: `logs/profile-2026-09-10/boots-2026-09-11/`.
+Raw outputs of the 2026-09-11 boots live on the deployment host under
+`logs/profile-2026-09-10/boots-2026-09-11/` — host-side records, **not shipped
+here**; what this directory ships is the probe kit itself.

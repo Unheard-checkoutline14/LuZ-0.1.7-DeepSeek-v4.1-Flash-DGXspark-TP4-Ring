@@ -10,9 +10,11 @@
 
 - `<head-node>` / `<worker-rank1>` / `<worker-rank2>` / `<worker-rank3>` 指代你自己的四台机器
   （1 台 head + 3 台 worker）的 SSH 别名。照抄命令前请替换。
-- 文中出现的 `~/w6-kit/…`、`~/v41-028-build-…/`、`~/r4-ops-work/…`、`autotune-golden/` 都是
-  **部署宿主上的运维对象，不随本仓分发**。保留这些路径是为了留下数字的来路（provenance），
-  不是让读者去打开它们。
+- 文中出现的 `~/w6-kit/…`、`~/v41-028-build-…/`、`~/r4-ops-work/…`、`autotune-golden/`、
+  `guard/`（如 `guard/BASELINE.md`）都是**部署宿主上的运维对象，不随本仓分发**。保留这些
+  路径是为了留下数字的来路（provenance），不是让读者去打开它们。其中发到镜像
+  `/opt/dsv41/kit/` 的那部分同名件（含 `guard/` 套件）可在发布 tar 内抽取核对，
+  见 [`RELEASE-NOTES-v0.2.8.md §2.3–§2.4`](../release-notes/RELEASE-NOTES-v0.2.8.md)。
 - **可以自己核对的**：`sglang-overlay/README.md` 的镜像侧文件清单 ·
   [`RELEASE-NOTES-v0.2.8.md §2`](../release-notes/RELEASE-NOTES-v0.2.8.md) 的逐件判词 ·
   [`scripts/verify_release_artifact.py`](../../scripts/verify_release_artifact.py) 对发布 tar 的离线复算 ·
