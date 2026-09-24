@@ -410,9 +410,9 @@ answered questions about *previous* forms and are not comparable with §2
   argument
 - `scripts/` — SSH helper, `verify/` probe kit, self-heal monitor + systemd unit,
   `gate.sh`, `nccl_selfcheck.sh`, `verify_release_artifact.py` (**offline** archive
-  verifier: blob integrity + content identity, no cluster needed), and the three
+  verifier: blob integrity + content identity, no cluster needed), and the four
   repository checks (`check_redaction.py`, `check_relative_links.py`,
-  `check_report_tables.py`)
+  `check_report_tables.py`, `check_env_coverage.py` — the launcher↔template contract)
 - `benchmarks/` — the harnesses that produced the tables, with a
   [harness-to-archive map](benchmarks/README.md), the
   [SD-1 protocol](benchmarks/README.md), the
@@ -438,7 +438,7 @@ answered questions about *previous* forms and are not comparable with §2
   says how, and names the one column that is not
 - `.env.tp4.example` — the configuration this repo runs (sanitized template; the live
   `.env.tp4` is gitignored). Key-by-key comparison against the 0.2.8 production file,
-  the three image pins, and the 0.2.8 delta list:
+  the four `IMAGE` sites, and the 0.2.8 delta list:
   [docs/CONFIG-v0.2.8-ENV.md](docs/CONFIG-v0.2.8-ENV.md)
 - `BUILD-IDENTITY.md` — image IDs, SGLang commit, component versions, artifact hashes,
   and the exact identity formula to check an image against

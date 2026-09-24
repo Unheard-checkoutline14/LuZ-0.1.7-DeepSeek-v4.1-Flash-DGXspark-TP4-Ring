@@ -347,7 +347,8 @@ b12x 是消费级 Blackwell（SM120/SM121）的 CuTe-DSL 内核库：NVFP4/MXFP4
   [`gateway/README.md`](gateway/README.md)
 - `scripts/` — SSH 助手、`verify/` 探针集、自愈监控 + systemd 单元、`gate.sh`、`nccl_selfcheck.sh`、
   `verify_release_artifact.py`（**离线**归档校验器：blob 完整性 + 内容身份，无需集群），
-  以及三个仓库自检（`check_redaction.py`、`check_relative_links.py`、`check_report_tables.py`）
+  以及四个仓库自检（`check_redaction.py`、`check_relative_links.py`、`check_report_tables.py`、
+  `check_env_coverage.py` —— 启动器↔模板契约）
 - `benchmarks/` — 产出这些表的 harness，附
   [harness → 归档映射](benchmarks/README.md)、[SD-1 口径](benchmarks/README.md)、
   [脱敏策略](benchmarks/README.md)、以及
@@ -368,7 +369,7 @@ b12x 是消费级 Blackwell（SM120/SM121）的 CuTe-DSL 内核库：NVFP4/MXFP4
   9/9 blob 摘要、层链解压校验、身份复现）。
   每一个公布的数字都能由这些文件复算——[`data/README.md`](data/README.md) 说明怎么复算，
   并**点名列出唯一一个不能复算的列**
-- `.env.tp4.example` — 本仓库实际运行的配置（脱敏模板；现网 `.env.tp4` 已 gitignore）。与 0.2.8 生产 `.env.tp4` 的**逐键对照**、三处镜像 pin、以及 0.2.8 的改动清单见 [docs/CONFIG-v0.2.8-ENV.md](docs/CONFIG-v0.2.8-ENV.md)
+- `.env.tp4.example` — 本仓库实际运行的配置（脱敏模板；现网 `.env.tp4` 已 gitignore）。与 0.2.8 生产 `.env.tp4` 的**逐键对照**、四处 `IMAGE` 出处、以及 0.2.8 的改动清单见 [docs/CONFIG-v0.2.8-ENV.md](docs/CONFIG-v0.2.8-ENV.md)
 - `BUILD-IDENTITY.md` — 镜像 ID、SGLang commit、组件版本、发布件哈希，
   以及用于核对镜像的**内容身份公式**
 - `docs/` — 部署方案、上游 ISSUE/PR 调研、基准横向对比、终版指标板、

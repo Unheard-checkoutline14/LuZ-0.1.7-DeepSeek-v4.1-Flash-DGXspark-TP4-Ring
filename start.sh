@@ -34,6 +34,23 @@ cd "$ROOT"
 
 # Profiles: start.sh reads .env (3 Sparks, TP3); start-tp4.sh points ENV_FILE at
 # .env.tp4 (4 Sparks, TP4) and gives that profile its own state/log dirs.
+# ⚠ 2026-09-21 (batch 7 lesson): calling start.sh WITHOUT ENV_FILE=.env.tp4
+# silently sources the stale dev .env (CHUNKED_PREFILL_SIZE=1024 there vs the
+# validated 4096/8192 tiers) — the tier gate catches it late. Warn loudly here.
+if [[ -z "${ENV_FILE:-}" && -f "$ROOT/.env.tp4" && -f "$ROOT/.env" ]]; then
+  _tp4_chunk=$(grep -E '^CHUNKED_PREFILL_SIZE=' "$ROOT/.env.tp4" | tail -1 | cut -d= -f2)
+  _dev_chunk=$(grep -E '^CHUNKED_PREFILL_SIZE=' "$ROOT/.env" | tail -1 | cut -d= -f2)
+  if [[ -n "${_tp4_chunk:-}" && "${_dev_chunk:-}" != "$_tp4_chunk" ]]; then
+    echo "[warn] ENV_FILE 未设置：默认使用 .env（CHUNKED_PREFILL_SIZE=${_dev_chunk:-?}），" >&2
+    echo "[warn] 与 .env.tp4（${_tp4_chunk}）分叉。生产四机形态请用：ENV_FILE=.env.tp4 ./start.sh …" >&2
+  fi
+fi
+# 审计 P2 修：stop.sh 无 ENV_FILE 时优先 .env.tp4，start 却默认 .env——不对称陷阱
+# （裸 ./start.sh serve 会静默拿 3 机 dev 拓扑）。有 .env.tp4 即默认生产形态。
+if [[ -z "${ENV_FILE:-}" && -f "$ROOT/.env.tp4" ]]; then
+  ENV_FILE="$ROOT/.env.tp4"
+  echo "[dsv41] ENV_FILE 未指定：检测到 .env.tp4，默认按生产四机形态加载（显式指定可覆盖）" >&2
+fi
 ENV_FILE="${ENV_FILE:-$ROOT/.env}"
 ENV_EXAMPLE="${ENV_EXAMPLE:-$ROOT/.env.example}"
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -42,9 +59,42 @@ if [[ ! -f "$ENV_FILE" ]]; then
   echo "[dsv41] wrote $(basename "$ENV_FILE") from $(basename "$ENV_EXAMPLE") — edit IPs if needed"
 fi
 set -a
+# ── 遮蔽快照（审计 P1 系统性修复，2026-09-21）──────────────────────────────
+# source 会覆盖调用方已导出的同名变量。EXTRA_SGLANG_ARGS 曾是个例修复（_APPEND 口），
+# 但 IMAGE/API_KEY/EXTRA_DOCKER_ENV/CHUNKED_PREFILL_SIZE/SKIP_* 同被静默吞——且
+# 全部预检会在「被吞后的值」上自洽通过、全绿放行（版本切换 A/B 作废/鉴权轮换失效
+# 都无从察觉）。此处先抓快照，source 后比对；被吞即拒绝起栈并给出正确入口。
+# 注：HOST 刻意不入观察名单（shell 环境可能自设，误伤面大于价值）。
+_SHADOW_WATCH=(IMAGE API_KEY EXTRA_DOCKER_ENV EXTRA_SGLANG_ARGS CHUNKED_PREFILL_SIZE SKIP_SMOKE SKIP_PREPARE NFS_SHARE)
+declare -A _CALLER_SNAPSHOT=()
+for _k in "${_SHADOW_WATCH[@]}"; do
+  _v="${!_k:-}"
+  [[ -n "$_v" ]] && _CALLER_SNAPSHOT[$_k]="$_v"
+done
+unset _k _v
 # shellcheck disable=SC1091
 source "$ENV_FILE"
 set +a
+for _k in "${!_CALLER_SNAPSHOT[@]}"; do
+  if [[ "${_k:+x}" && "${!_k}" != "${_CALLER_SNAPSHOT[$_k]}" ]]; then
+    {
+      echo "[x] 环境变量遮蔽拦截：调用方传了 $_k，但 $ENV_FILE 也定义了同名键，source 已把你的传值覆盖为 env 文件值。"
+      echo "    你的传值不会生效且无预检能发现——这正是 09-21 SPF 臂实锤的病类（EXTRA_SGLANG_ARGS 传值被吞、引擎仍 fcfs）。"
+      echo "    正确入口：①一次性追加引擎参数 → EXTRA_SGLANG_ARGS_APPEND='...'；②版本/整组实验 → cp $ENV_FILE ${ENV_FILE}-xxx 改行后 ENV_FILE=${ENV_FILE}-xxx；③生产变更 → 直接改 $ENV_FILE。"
+    } >&2
+    exit 1
+  fi
+done
+unset _k
+# 一次性实验参数追加口（2026-09-21 SPF 臂白盒实证）：.env.tp4 自身定义
+# EXTRA_SGLANG_ARGS（生产集），上面 source 会覆盖调用方在 shell 传入的同名
+# 变量——直接传 EXTRA_SGLANG_ARGS 只会静默丢失（首战 SPF 靴实锤 schedule_policy
+# 仍 fcfs）。走 _APPEND：追加到生产集之后（argparse 后者胜）；本名不被 env 文件
+# 定义故穿过 source 存活，image_arg_preflight 在合并值上校验。
+if [[ -n "${EXTRA_SGLANG_ARGS_APPEND:-}" ]]; then
+  EXTRA_SGLANG_ARGS="${EXTRA_SGLANG_ARGS:-} ${EXTRA_SGLANG_ARGS_APPEND}"
+  export EXTRA_SGLANG_ARGS
+fi
 
 HEAD_IP="${HEAD_IP:-10.0.0.1}"
 # Workers: WORKER_IPS="10.0.0.2 10.0.0.3 ..." (space or comma separated) and
@@ -90,10 +140,14 @@ HF_REVISION="${HF_REVISION:-fb2764a5cf321eaa5070ca8f9e892818f477c16d}"
 EXPECTED_SHARDS="${EXPECTED_SHARDS:-48}"
 
 BASE_IMAGE="${BASE_IMAGE:-lmsysorg/sglang:dev-dsv41}"
-IMAGE="${IMAGE:-dsv41-3x-spark:local}"
+# 默认值必须**跟随生产 pin**（`.env.tp4` 的 IMAGE + `guards.conf` 的 sglang-image envpin）。
+# 2026-09-23 修：旧默认长期滞后（0.2.4 → 0.2.7 递进；0.2.4 为 125 层、落后三代），
+# 于是任何「忘了带 ENV_FILE」的起栈会静默拿到旧世代镜像 —— 而两处判据查的都是
+# .env.tp4，默认值不在任何判据覆盖内，所以这种不一致**没有任何告警面**。
+IMAGE="${IMAGE:-dsv41-sglang-optimized:0.2.8}"
 HEAD_CTN="${HEAD_CTN:-dsv41-head}"
 WORKER_CTN="${WORKER_CTN:-dsv41-worker}"
-WORKER_DIR="${WORKER_DIR:-/home/${WORKER_USER}/dsv41-3x-spark}"
+WORKER_DIR="${WORKER_DIR:-/home/${WORKER_USER}/dsv41-flash-dgxsparks}"
 
 NNODES="${NNODES:-$(( ${#WORKER_IPS[@]} + 1 ))}"
 [[ "$NNODES" -eq $(( ${#WORKER_IPS[@]} + 1 )) ]] || { echo "NNODES=$NNODES but ${#WORKER_IPS[@]} workers are configured" >&2; exit 1; }
@@ -132,12 +186,85 @@ MAX_RUNNING_REQUESTS="${MAX_RUNNING_REQUESTS:-4}"
 CHUNKED_PREFILL_SIZE="${CHUNKED_PREFILL_SIZE:-2048}"
 
 # P3⑤ 2026-09-19：顶层 NCCL_ 键 lint（客户坑 9：白名单外的顶层 NCCL_* 不透传，静默陷阱）
+# 2026-09-21 白盒修正：旧 pattern *" $_k ") 是后缀匹配（只有最后一个词条能命中）⇒
+# 12 个在单内的键也误警告，警告疲劳后真泄漏反被忽视。改包含匹配 *" $_k "*。
 for _k in $(compgen -A variable NCCL_ 2>/dev/null || true); do
-  case " NCCL_ALGO NCCL_BUFFSIZE NCCL_CROSS_NIC NCCL_CUMEM_HOST_ENABLE NCCL_DEBUG NCCL_DEBUG_SUBSYS NCCL_IB_DISABLE NCCL_IB_GID_INDEX NCCL_IB_HCA NCCL_IB_MERGE_NICS NCCL_IB_RETRY_CNT NCCL_IB_SUBNET_AWARE_ROUTING NCCL_IB_TIMEOUT NCCL_IB_TOS NCCL_IGNORE_CPU_AFFINITY NCCL_MAX_NCHANNELS NCCL_MIN_NCHANNELS NCCL_NET NCCL_NET_PLUGIN NCCL_PROTO NCCL_SET_THREAD_NAME NCCL_SHM_DISABLE NCCL_SOCKET_IFNAME NCCL_TUNER_THRESHOLD " in
-    *" $_k ") ;;
+  # NCCL_IB_GID_INDEX_FORCE 白盒补记：它是 start.sh 自用的宿主侧键（GID 预检/注入
+  # -e NCCL_IB_GID_INDEX=$gid 时消费，见 fabric_gid_preflight 与 cmd_serve），并非
+  # 靠透传进容器——所以也入白名单，否则每次启动都假 warn（2026-09-21 T7 白盒抓出）。
+  case " NCCL_HOST_DIR NCCL_ALGO NCCL_BUFFSIZE NCCL_CROSS_NIC NCCL_CUMEM_HOST_ENABLE NCCL_DEBUG NCCL_DEBUG_SUBSYS NCCL_IB_DISABLE NCCL_IB_GID_INDEX NCCL_IB_GID_INDEX_FORCE NCCL_IB_HCA NCCL_IB_MERGE_NICS NCCL_IB_RETRY_CNT NCCL_IB_SUBNET_AWARE_ROUTING NCCL_IB_TIMEOUT NCCL_IB_TOS NCCL_IGNORE_CPU_AFFINITY NCCL_MAX_NCHANNELS NCCL_MIN_NCHANNELS NCCL_NET NCCL_NET_PLUGIN NCCL_PROTO NCCL_SET_THREAD_NAME NCCL_SHM_DISABLE NCCL_SOCKET_IFNAME NCCL_TUNER_THRESHOLD " in
+    *" $_k "*) ;;
     *) echo "[warn] 顶层 $_k 不在 start.sh 白名单，不会透传到容器——请写入 EXTRA_DOCKER_ENV（客户坑 9）" ;;
   esac
 done
+
+# 2026-09-22（同族漏配，600K 首启前白盒抓出）：上面 lint 只覆盖 NCCL_*，但**引擎侧
+# 门控键**同样只有 (a) EXTRA_DOCKER_ENV 词条 或 (b) 本脚本硬编码 -e 才进容器——写成
+# 顶层变量一样静默无效。实锤：.env.tp4-600k 曾把 DSV41_IDLE_RELEASE=1 写成顶层变量
+# ⇒ 容器 os.environ 读不到 ⇒ FIX-B idle-release 静默关闭（不拦住的话 600K 首启即带
+# 缺陷跑，且所有预检都会在「以为开着」的假设上全绿）。策展清单=引擎/overlay 从容器
+# env 读的键；命中即告警不 die（留应急起栈余地，但每次启动都出声）。新增引擎门控键
+# 时请同步此表。
+_ENGINE_GATE_KEYS=(
+  DSV41_IDLE_RELEASE DSV41_IDLE_RELEASE_MIN_S DSV41_IDLE_RELEASE_MIN_BYTES
+  DSV41_SCHED_SNAPSHOT DSV41_SCHED_MEM_HISTORY
+  DSV41_DENSE_INDEXER_LOGITS_BUDGET_BYTES DSV41_PREFILL_SHARE_TOKENS DSV41_PREFILL_EMPTY_CACHE_TOKENS
+  SGLANG_DSV4_PAGETABLE_PAGES_GRID SGLANG_DSV4_INDEXER_LOGITS_BUDGET_MB
+  DSV41_MOE_B12X DSV41_MOE_B12X_CAPS DSV41_MOE_B12X_QUANT DSV41_SKIP_NONFINAL_DECODER
+  DSV41_SHARED_PAD_K DSV41_TP_PAD SGLANG_DSV4_KV_LAYOUT SGLANG_RAGGED_VERIFY_MODE
+  SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION SGLANG_QW3_DSPARK_LAUNCH_PARAMS
+)
+# 本脚本硬编码 -e 转发的键（见 cmd_serve 的 -e 列表）：白名单，命中不告警。
+_HOST_FORWARDED_KEYS=(
+  DSV41_CACHE_GIB DSV41_IO_THREADS DSV41_RESIDENT_SCALES DSV41_CACHE_WAYS
+  DSV41_STATS_SECONDS DSV41_PACKED_DIR DSV41_MXFP8_BACKEND DSV41_TP_PAD
+)
+for _k in "${_ENGINE_GATE_KEYS[@]}"; do
+  _v="${!_k:-}"
+  [[ -z "$_v" ]] && continue
+  [[ " ${_HOST_FORWARDED_KEYS[*]} " == *" $_k "* ]] && continue
+  grep -qE "(^| )$_k=" <<<"${EXTRA_DOCKER_ENV:-}" && continue
+  echo "[warn] 顶层 $_k=$_v 不会透传到容器（引擎 os.environ 读不到 ⇒ 该门静默失效）——请写入 EXTRA_DOCKER_ENV（客户坑 9 同族）" >&2
+done
+unset _k _v
+
+# 引擎门控键「意图==实效」的后半段：上面的 lint 拦「顶层漏配」，这里拦「docker 层
+# 吞 token / 拼写漂移」——起栈后把 EXTRA_DOCKER_ENV 里属于策展清单的 token 逐个与
+# 容器实际 env 比对。head 与 worker 走同一份期望表、同一段比较逻辑（只有一侧被查
+# 是 split-brain 的老坑）。同键后者胜=按 docker 语义去重，避免「EXTRA 里同键两次」
+# 造成假失败。
+engine_env_expect_tokens() {  # 输出最终生效的 KEY=VALUE 逐行（仅策展清单内）
+  local _ed _k
+  local -A _last=()
+  local -a _order=()
+  for _ed in ${EXTRA_DOCKER_ENV:-}; do
+    case "$_ed" in *=*) _k="${_ed%%=*}" ;; *) continue ;; esac
+    [[ " ${_ENGINE_GATE_KEYS[*]} " == *" $_k "* ]] || continue
+    [[ -n "${_last[$_k]:-}" ]] || _order+=("$_k")
+    _last[$_k]="$_ed"
+  done
+  for _k in "${_order[@]}"; do echo "${_last[$_k]}"; done
+}
+engine_env_assert() {  # engine_env_assert <显示名> <容器env整串>；缺 token 即拒（返回 1）
+  local _label="$1" _env="$2" _tok _miss=""
+  # remote_on 走 PTY，回传 stdout 是 CRLF（2026-09-22 实测：worker 侧每行尾带 \r，
+  # 于是 grep -qxF 对全部 token 都 miss ⇒ 断言把真起栈拦下，还报"全部漏配"的假诊断；
+  # 当时用 python text=True 复核反而"看不到 \r"——那是它替我归一了换行）。
+  # 先归一化再比：传输形态不是判据，只有内容才是。
+  _env="${_env//$'\r'/}"
+  while read -r _tok; do
+    [[ -z "$_tok" ]] && continue
+    grep -qxF -- "$_tok" <<<"$_env" || _miss="$_miss $_tok"
+  done < <(engine_env_expect_tokens)
+  [[ -z "$_miss" ]] && return 0
+  echo "[x] $_label 容器 env 与 EXTRA_DOCKER_ENV 不一致（意图≠实效，缺:$_miss）" >&2
+  if [[ -z "$_env" ]]; then
+    echo "    env 串为空 ⇒ 先排除 inspect/ssh 本身失败（非漏配）；重跑一次即可分辨。" >&2
+  else
+    echo "    env 串非空 ⇒ 真漏配：docker 吞 token 或 EXTRA_DOCKER_ENV 拼写漂移。" >&2
+  fi
+  return 1
+}
 
 # ── chunk 三档切换（2026-09-18）：用户改 .env 的 CHUNKED_PREFILL_SIZE 一行即可切换 ──────────
 # 已验证档位（GPU 密扫零失败 + 可起栈）：4096（生产基线）/ 6144（W5 密扫 539 值）/ 8192（本日 681 值）。
@@ -286,6 +413,188 @@ gid_index_local() {
   return 1
 }
 
+# ── 2026-09-21 断电事故防线：fabric GID 洞预检 ──────────────────────────────
+# 病：断电重启后接口初始化乱序 ⇒ RoCE GID 表出洞（v2-IPv4 落到 idx4，idx3 空）。
+# NCCL_IB_GID_INDEX_FORCE=3 时 NCCL 在洞口 modify_qp RTR 必挂（errno 61）——
+# 表现=容器起 2-3 分钟后 NCCL bootstrap 崩，自愈单元空转 20 次撞 start-limit。
+# 修法=对洞口做 IP 环回（ip addr del/add 同地址）逼 rdma_cm 重建紧凑 GID 表。
+# 详见 ~/w6-kit/FABRIC-GID-REPAIR-RUNBOOK.md。此函数把 13 分钟崩环变 5 秒定向 abort。
+_gid_holes_local() {  # 打印洞口 HCA 名（idx 无 RoCE v2 GID 即洞）
+  local idx hca t; idx="${NCCL_IB_GID_INDEX_FORCE:-${NCCL_IB_GID_INDEX:-3}}"
+  local IFS=','
+  for hca in $IB_HCA; do
+    hca="${hca// /}"
+    [[ -d /sys/class/infiniband/$hca ]] || continue
+    t=$(cat /sys/class/infiniband/$hca/ports/1/gid_attrs/types/$idx 2>/dev/null)
+    [[ "$t" == "RoCE v2" ]] || echo "$hca"
+  done
+}
+
+# ── 2026-09-21 版本切换防线（三路子代理白盒审计落地）───────────────────────
+# 雷 1：EXTRA_SGLANG_ARGS 带新镜像独有的 flag/choice（如 --schedule-policy
+#   shortest-prefill-first）配到旧镜像 ⇒ argparse 崩在 3 分钟容器引导后。
+#   这里在起栈前用镜像内 server_args.py 做存在性预检（5 秒死胜过 3 分钟死）。
+# 雷 2：换 IMAGE 起栈后没人知道在跑的是哪版（state/ 跨版本共享、launch.json
+#   不记 IMAGE）⇒ 启动横幅 + launch-banner.log 留痕，gate/守卫可断言。
+# ── 镜像-参数预检（2026-09-21 版本切换防雷，v2=parser 自省）────────────────
+# ★v1 字面量提取法已被白盒证伪废弃：0.2.7 fork 的 server_args.py 是 attrs 新式
+#   声明（schedule_policy: A[str, Arg(...)]），CLI flag 名是运行时从属性名派生，
+#   字面 `--schedule-policy` 根本不出现在源文本 ⇒ 字面量法对新式声明全盲、必假拦。
+#   v2 改让镜像自己的 argparse 说话：认哪些 flag、每个 choice flag 合法值是什么。
+# ★判别力实证（本日四臂白盒）：--schedule-policy 在 0.2.6/0.2.7 都在（老 flag），
+#   版本雷在 choice——"shortest-prefill-first" 只有 0.2.7+ 认（#40024 正式版合入）。
+#   所以 choice 级检查是拦雷主力，不是 flag 级的附属。
+# 结果按镜像 content_id 缓存于 state/flagpreflight/（每镜像只付一次 ~30s 自省）。
+image_arg_preflight() {
+  [[ -z "${EXTRA_SGLANG_ARGS:-}" ]] && return 0
+  local -a _flags=()
+  local _t _f _v _ch _miss=0
+  for _t in $EXTRA_SGLANG_ARGS; do
+    [[ "$_t" == --* ]] && _flags+=("$_t")
+  done
+  [[ ${#_flags[@]} -eq 0 ]] && return 0
+  local _cid _cache
+  _cid=$(img_content_id "$IMAGE")
+  mkdir -p "$STATE_DIR/flagpreflight" 2>/dev/null || true
+  _cache="$STATE_DIR/flagpreflight/${_cid:-uncached}.txt"
+  if [[ -n "$_cid" && -s "$_cache" ]]; then
+    info "flag 清单命中缓存（镜像 $IMAGE content_id=$_cid）"
+  else
+    # 一次 python 自省：FLAGS:行=flag 名；CHOICES:行=值型 flag 的合法值(逗号串)
+    timeout 120 docker run --rm --entrypoint python "$IMAGE" -c '
+import argparse
+from sglang.srt.server_args import ServerArgs
+p = argparse.ArgumentParser(prog="x", add_help=False)
+ServerArgs.add_cli_args(p)
+for a in p._actions:
+    for s in a.option_strings:
+        print("FLAGS:" + s)
+        if getattr(a, "choices", None):
+            print("CHOICES:%s:%s" % (s, ",".join(str(c) for c in a.choices)))
+' > "$_cache" 2>/dev/null || true
+    if [[ ! -s "$_cache" ]]; then
+      rm -f "$_cache"
+      warn "镜像 parser 自省失败（import 慢/镜像无 python 入口？），flag 预检降级跳过（弱化态）"
+      return 0
+    fi
+  fi
+  for _f in "${_flags[@]}"; do
+    grep -qx "FLAGS:$_f" "$_cache" || {
+      err "EXTRA_SGLANG_ARGS 的 $_f 不被镜像 $IMAGE 识别（版本切换雷：新 flag 配旧镜像）"
+      _miss=1
+    }
+  done
+  # choice 级泛化检查：任何带 choices 的值型 flag，值不在 choices 即拦
+  for _f in "${_flags[@]}"; do
+    _v="${EXTRA_SGLANG_ARGS##*$_f }"; _v="${_v%% *}"
+    [[ -z "$_v" || "$_v" == --* ]] && continue   # 尾置 flag / 后面跟另一 flag：无数可查
+    _ch=$(grep -x "CHOICES:$_f:.*" "$_cache" | head -1 | cut -d: -f3-)
+    [[ -z "$_ch" ]] && continue                  # 该 flag 无 choices 约束：跳过
+    grep -qx -- "$_v" <(tr ',' '\n' <<<"$_ch") || {
+      err "$_f 的值 '$_v' 不在镜像 $IMAGE 的 choices[$_ch]（版本切换雷：新值配旧镜像）"
+      _miss=1
+    }
+  done
+  [[ $_miss -eq 1 ]] && return 1
+  info "镜像-参数预检过：${#_flags[@]} 个 flag + choice 值全部被 $IMAGE 识别"
+  return 0
+}
+
+# ── 四机 GPU 时钟 burn 预检（2026-09-21 门禁统筹⑥；栈停态专用）──────────────
+# PD 安全模式病（runbook §7）：断电/OOM 后某机 SM 钉 513-728MHz，起栈=半速栈。
+# 探针=生产镜像跑 6s matmul 并采负载时钟，健康 ≥1500MHz。GPU 被占（栈已在跑）
+# 时跳过该机并 warn——本预检只该在栈停时被调到。
+gpu_clock_preflight() {
+  local -a _pids=()
+  local _h _out _mhz _w _bad=0
+  for _h in head "${WORKER_HOSTS[@]}"; do
+    (
+      if [ "$_h" = head ]; then
+        if nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -q '[0-9]'; then echo "BUSY"; exit 0; fi
+        docker run --rm --gpus all --entrypoint python "$IMAGE" -c '
+import torch,time
+a=torch.randn(8192,8192,device="cuda");b=torch.randn(8192,8192,device="cuda")
+t0=time.time()
+while time.time()-t0<12: c=a@b; torch.cuda.synchronize()
+' >/dev/null 2>&1 &
+        p=$!
+        # 审计 P2 修：冷 page cache 时 import torch 可 >4s，固定 sleep 4 会采到 idle
+        # ~351MHz → 误报楔死 die → 把人推向无谓物理断电。等负载真建立（时钟 ≥1000）
+        # 再取读数；楔死机等不到 → 超时后取到低值 → 正确 FAIL。
+        _w=0
+        while [ $_w -lt 14 ]; do
+          _cl=$(nvidia-smi --query-gpu=clocks.sm --format=csv,noheader,nounits 2>/dev/null | tr -d ' ' | grep -oE '^[0-9]+' || echo 0)
+          [ "${_cl:-0}" -ge 1000 ] && break
+          sleep 2; _w=$((_w+1))
+        done
+        nvidia-smi --query-gpu=clocks.sm,power.draw --format=csv,noheader,nounits | tr -d ' '
+        wait $p 2>/dev/null
+      else
+        ssh "$_h" "
+nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -q '[0-9]' && { echo BUSY; exit 0; }
+docker run --rm --gpus all --entrypoint python $IMAGE -c \"
+import torch,time
+a=torch.randn(8192,8192,device='cuda');b=torch.randn(8192,8192,device='cuda')
+t0=time.time()
+while time.time()-t0<12: c=a@b; torch.cuda.synchronize()
+\" >/dev/null 2>&1 &
+p=\$!
+_w=0
+while [ \$_w -lt 14 ]; do
+  _cl=\$(nvidia-smi --query-gpu=clocks.sm --format=csv,noheader,nounits 2>/dev/null | tr -d ' ' | grep -oE '^[0-9]+' || echo 0)
+  [ "\${_cl:-0}" -ge 1000 ] && break
+  sleep 2; _w=\$((_w+1))
+done
+nvidia-smi --query-gpu=clocks.sm,power.draw --format=csv,noheader,nounits | tr -d ' '
+wait \$p 2>/dev/null" 2>/dev/null
+      fi
+    ) > "/tmp/gpuclk-$_h.preflight" 2>/dev/null &
+    _pids+=($!)
+  done
+  for _p in "${_pids[@]}"; do wait "$_p" 2>/dev/null; done
+  for _h in head "${WORKER_HOSTS[@]}"; do
+    _out=$(cat "/tmp/gpuclk-$_h.preflight" 2>/dev/null | head -1)
+    _mhz=$(printf '%s' "$_out" | cut -d',' -f1 | grep -oE '^[0-9]+' || echo 0)
+    _w=$(printf '%s' "$_out" | cut -d',' -f2 | grep -oE '^[0-9]+' || echo '?')
+    rm -f "/tmp/gpuclk-$_h.preflight"
+    case "$_out" in
+      BUSY|"") warn "gpu-clock 预检跳过 $_h（GPU 被占或探针跑不了——若栈确已停则人工查）" ;;
+      *) if [ "${_mhz:-0}" -ge 1500 ]; then
+           info "gpu-clock 预检过 $_h：burn=${_mhz}MHz/${_w}W"
+         else
+           err "gpu-clock 楔死 $_h：burn=${_mhz}MHz/${_w}W（PD 安全模式；修复=拔墙上 AC 冷断电，runbook §7）"
+           _bad=1
+         fi ;;
+    esac
+  done
+  [[ $_bad -eq 0 ]] || return 1
+  info "gpu-clock 预检过：四机负载时钟健康"
+  return 0
+}
+
+fabric_gid_preflight() {
+  local _idx="${NCCL_IB_GID_INDEX_FORCE:-${NCCL_IB_GID_INDEX:-3}}"
+  local holes="$(_gid_holes_local)"
+  [[ -n "$holes" ]] && { warn "head GID 洞(idx${_idx}): $(echo $holes | tr '\n' ' ')"; return 1; }
+  local h rholes
+  for h in "${WORKER_HOSTS[@]}"; do
+    # idx 在本地展开后嵌入（白盒审计修正：旧写法 \${NCCL_IB_GID_INDEX_FORCE:-3} 在远端
+    # 展开而远端无此 env ⇒ 恒 3，FORCE≠3 时本地/worker 口径错位——与下方 IB_HCA 同款嵌入法）
+    # 审计 P1 修：ssh 不通（断电后高发窗）时旧写法输出空→判「无洞」放行——
+    # 5 秒定向拦截在故障场景静默作废。remote_on 的 rc 会被管道吃掉，先单独收。
+    if ! _rg=$(remote_on "$h" "for c in \$(echo '$IB_HCA' | tr ',' ' '); do [ -d /sys/class/infiniband/\$c ] || continue; [ \"\$(cat /sys/class/infiniband/\$c/ports/1/gid_attrs/types/$_idx 2>/dev/null)\" = 'RoCE v2' ] || echo \$c; done" 2>/dev/null); then
+      warn "worker $h ssh 失败——GID 无法核验（fail-closed：宁拦勿放；机器没起完/网络未稳，稍候重试）"
+      return 1
+    fi
+    rholes=$(printf '%s' "$_rg" | tr -d '\r')
+    if [[ -n "$rholes" ]]; then
+      warn "worker $h GID 洞(idx${_idx}): $rholes"
+      return 1
+    fi
+  done
+  return 0
+}
+
 gid_index_remote() {
   local host="$1" ip="$2" hex
   hex=$(printf '%02x%02x:%02x%02x' $(echo "$ip" | tr . ' '))
@@ -303,7 +612,12 @@ gid_index_remote() {
 # Each present file in SGLANG_OVERLAY_DIR is mounted over its in-container
 # path; md5 discipline applies (scp the same file to every worker host).
 SGLANG_OVERLAY_DIR="${SGLANG_OVERLAY_DIR:-$HOME/dsv41-flash-dgxsparks/sglang-overlay}"
+# autotune golden 锁定（2026-09-21 用户指令）：见 docker_common_args 里的挂载注释。
+# 存在即挂（四机 rsync 对齐）；不存在=未启用（行为与旧版完全一致）。
+AUTOTUNE_GOLDEN_DATA="${AUTOTUNE_GOLDEN_DATA:-$ROOT/autotune-golden/data}"
 declare -A SGLANG_OVERLAY_MAP=(
+  # 2026-09-21 A/B 臂：#39482 UE8M0(121 in tuple) 回退嫌疑——文件存在即挂载（dev 模式）
+  [configurer.py]=python/sglang/srt/layers/deep_gemm_wrapper/configurer.py
   [decode_cuda_graph_runner.py]=python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py
   # DSV41 (2026-09-19): scheduler prefill share cap (L1186 idea, #34554); env DSV41_PREFILL_SHARE_TOKENS
   [schedule_policy.py]=python/sglang/srt/managers/schedule_policy.py
@@ -358,7 +672,41 @@ declare -A SGLANG_OVERLAY_MAP=(
   [hybrid_pool_assembler.py]=python/sglang/srt/mem_cache/hybrid_cache/hybrid_pool_assembler.py
   [kv_cache_configurator.py]=python/sglang/srt/mem_cache/kv_cache_configurator.py
   [pool_configurator.py]=python/sglang/srt/model_executor/pool_configurator.py
+  # CTX600K R1/R2 (2026-09-21 窗口)：indexer logits 尺寸稳定化（宽度网格+行预算，
+  # 单请求 nonpaged prefill 的 O(N) strand 根治）+ page_table 分配宽度网格。
+  # 逃生口：SGLANG_DSV4_INDEXER_LOGITS_BUDGET_MB=0 / SGLANG_DSV4_PAGETABLE_PAGES_GRID=1
+  # （文件经 sglang-overlay.ctx600k/ 专用目录挂载，生产 0 模式不受影响）
+  [indexer.py]=python/sglang/srt/layers/attention/dsv4/indexer.py
+  # DSV41 #40352 语义级回移（2026-09-23）：候选协议层。backend 惰性导入 ⇒ 缺件时
+  # DSV41_IDX_PROTOCOL=0 的路径零影响；镜像也烘了同三份（见 build-0.2.8.sh PAYLOAD）。
+  [candidate_indexer.py]=python/sglang/srt/layers/attention/dsv4/candidate_indexer.py
+  [dense_prefill_indexer.py]=python/sglang/srt/layers/attention/dsv4/dense_prefill_indexer.py
+  [mqa_logits_utils.py]=python/sglang/srt/layers/attention/mqa_logits_utils.py
+  [dsv4_attn_metadata_kernels.py]=python/sglang/kernels/ops/attention/dsv4_attn_metadata_kernels.py
+  # 诊断 overlay（sglang-overlay.diag/）：SIGUSR1→CUDA memory_snapshot 落 /state/ctxsnap。
+  # 门=DSV41_SCHED_SNAPSHOT=1（缺省关闭，生产 0 模式零影响）。
+  [scheduler.py]=python/sglang/srt/managers/scheduler.py
 )
+# 审计 P2：declare -A 重复键静默 last-wins——一个挂载会在所有消费点（
+# _wov_expect / sglang_overlay_mounts / want_files）同时无声消失。源文本
+# 级检测一次，命中即喊（不拦启：三处消费同源自洽，坏的是「静默」本身）。
+_sov_dupes=$(awk '/^declare -A SGLANG_OVERLAY_MAP=\(/,/^\)/' "$0" \
+  | sed -n 's/^[[:space:]]*\[\([^]]*\)\]=.*/\1/p' | sort | uniq -d)
+[[ -n "$_sov_dupes" ]] && warn "SGLANG_OVERLAY_MAP 存在重复键（后者静默胜出）: $_sov_dupes"
+unset _sov_dupes
+# 2026-09-23 QA 补：**重复键查不到"两个键指向同一目标"**。实测本表有 2 个键
+#   （`dsv4_indexer.py` 与 `indexer.py`）都映射到 `.../dsv4/indexer.py`，这是
+#   **刻意的跨谱系兼容**：两个名字各只在各自谱系里存在——
+#     sglang-overlay.stale-20260921/ 有 dsv4_indexer.py、无 indexer.py
+#     sglang-overlay.ctx600k-probe/  有 indexer.py、无 dsv4_indexer.py
+#   所以"两个键"不是错误，**不能删任一个**。但它是两类静默的温床，故这里喊：
+#     ① 若某目录同时有两者 ⇒ dev 模式两条 `-v` 打同一目标，docker 静默 last-wins；
+#     ② 挂载数 ≠ 映射数时（源缺失被下面的 `-f` 跳过），现在由 sglang_overlay_mounts
+#        出声报数，不再让"只挂到一半"无声通过。
+_sov_dupt=$(awk '/^declare -A SGLANG_OVERLAY_MAP=\(/,/^\)/' "$0" \
+  | sed -n 's/^[[:space:]]*\[\([^]]*\)\]=\(.*\)$/\2/p' | sort | uniq -d)
+[[ -n "$_sov_dupt" ]] && warn "SGLANG_OVERLAY_MAP 多个键指向同一目标（dev 模式 -v last-wins；若为跨谱系兼容别名可忽略，但请确认两源不同时存在）: $_sov_dupt"
+unset _sov_dupt
 # 代码来源（2026-09-16 起）：镜像内 vs 宿主逐文件 bind-mount。
 #   0（默认，生产）＝ overlay 与 adapter/b12x/NCCL shim 都在镜像里 ⇒ 容器只剩**数据挂载**。
 #     好处是结构清楚，且"改了盘上、容器仍看旧 inode"这一类漂移**从结构上消失**
@@ -368,13 +716,25 @@ declare -A SGLANG_OVERLAY_MAP=(
 SGLANG_CODE_MOUNTS="${SGLANG_CODE_MOUNTS:-0}"
 sglang_overlay_mounts() {   # $1 = nameref array to append -v args to
   local -n _o=$1
-  local f
+  local f n=0 miss=()
   [[ "$SGLANG_CODE_MOUNTS" = 1 ]] || return 0
   for f in "${!SGLANG_OVERLAY_MAP[@]}"; do
     if [[ -f "$SGLANG_OVERLAY_DIR/$f" ]]; then
       _o+=( -v "$SGLANG_OVERLAY_DIR/$f:/sgl-workspace/sglang/${SGLANG_OVERLAY_MAP[$f]}:ro" )
+      n=$((n+1))
+    else
+      # 源缺失 ⇒ 跳过。跳过本身是对的（docker `-v` 对缺失源会**静默建成空目录**，
+      # 那会把目标文件变成目录），但"跳过多少"必须出声：否则指向错谱系的目录时，
+      # 你会以为覆盖了 49 个文件、实际只挂了 1 个（跨谱系别名那两条就是这样）。
+      miss+=("$f")
     fi
   done
+  local total=${#SGLANG_OVERLAY_MAP[@]}
+  if (( ${#miss[@]} )); then
+    warn "overlay 挂载 $n/$total（源缺失被跳过：${miss[*]}）—— dir=$SGLANG_OVERLAY_DIR；若这不符合预期，说明指向了别的谱系"
+  else
+    info "overlay 挂载 $n/$total（全部命中）"
+  fi
 }
 
 docker_common_args() {
@@ -405,6 +765,17 @@ docker_common_args() {
   # 同一条开关管 JIT 缓存：开发挂宿主 ~/.cache，生产用镜像里烘的那份。
   local -a cache_mounts=()
   [[ "$SGLANG_CODE_MOUNTS" = 1 ]] && cache_mounts=(-v "$HOME/.cache:/root/.cache")
+  # ── autotune golden 锁（2026-09-21 用户指令：健康缓存+锁定+重建带质量门）──
+  # 现状取证：0.2.x 的 FlashInfer autotune 战术表=9/19 v13 抽签烘进镜像（digest
+  # ebf68191，rank_tp0 独一份），每靴 3 个 worker rank 找不到自己的 rank 文件→
+  # 空票，1/4「多数」表决把 rank0 表覆写过去——锁定是烘镜像的偶然产物：无质量
+  # 验证（BASELINE.md 自证「钉住表不保证每区间最优」）、容器重建即丢覆写、配置
+  # 一变（缓存键变）就回冷签彩票。golden 改成设计行为：宿主目录钉住容器 autotune
+  # 根，四 rank 各自命中预置的同表 rank 文件 ⇒ 表决自然 no-op、跨靴跨机确定。
+  # 新配置键冷签会写进宿主目录 ⇒ 由 gate 的 MANIFEST 一致性断言拦截（质量门在
+  # ~/dsv41-flash-dgxsparks/AUTOTUNE-GOLDEN-RUNBOOK.md 的重建规程里）。
+  local -a golden_mounts=()
+  [[ -d "$AUTOTUNE_GOLDEN_DATA" ]] && golden_mounts=(-v "$AUTOTUNE_GOLDEN_DATA:/root/.cache/sglang/flashinfer/autotune")
   _a+=(
     --network host --ipc host --privileged --cap-add IPC_LOCK --gpus all
     # 无 --shm-size：--ipc host 之下 /dev/shm 就是宿主的（实测容器内 df=61G），
@@ -434,6 +805,7 @@ docker_common_args() {
     # 就把这里换成按需挂三个子目录（sglang/b12x/flashinfer），理由与验法见
     # V41-SGLANG-SESSION-DOSSIER §6。
     "${cache_mounts[@]}"
+    "${golden_mounts[@]}"
     "${code_mounts[@]}"
     -e "PYTHONPATH=/opt/dsv41/adapter:/opt/b12x"
     -e "OFFLOAD_MODE=$OFFLOAD_MODE"
@@ -908,6 +1280,46 @@ cmd_serve() {
   # 存在性 + 自足性 + 四机同一份（生产模式三条硬断言）
   image_preflight
 
+  # 2026-09-21 版本切换两防线：参数-镜像兼容预检 + 启动横幅留痕（launch-banner.log
+  # 供 gate/守卫断言「在跑的是哪版」；自愈单元把栈拉回别的镜像时可据此发现）
+  image_arg_preflight || die "EXTRA_SGLANG_ARGS 与镜像 $IMAGE 不兼容（见上方 [x] 明细）——版本切换配错，拒绝起栈"
+  # share/ec 真值在 EXTRA_DOCKER_ENV 串里（不是顶层 shell 变量——188 行死键教训），
+  # 直接 ${VAR:-?} 会永远打 ?（T9 白盒抓出），必须从串里抠。
+  _share=$(grep -o 'DSV41_PREFILL_SHARE_TOKENS=[0-9]*' <<<"$EXTRA_DOCKER_ENV" | head -1 | cut -d= -f2)
+  _ec=$(grep -o 'DSV41_PREFILL_EMPTY_CACHE_TOKENS=[0-9]*' <<<"$EXTRA_DOCKER_ENV" | head -1 | cut -d= -f2)
+  # 审计 P2 修：banner 无 golden 状态——本靴没锁运维无从而知（锁被静默绕过）
+  local _gstat=OFF
+  [[ -d "$AUTOTUNE_GOLDEN_DATA" ]] && _gstat=locked
+  [ "$_gstat" = OFF ] && warn "autotune golden 未挂载（本靴不锁定：镜像烘焙表+每靴票决形态——非有意停用请排查 $AUTOTUNE_GOLDEN_DATA）"
+  _banner="ENV_FILE=$(basename "$ENV_FILE") env_md5=$(md5sum "$ENV_FILE" 2>/dev/null | cut -c1-8) IMAGE=$IMAGE content_id=$(img_content_id "$IMAGE") chunk=$CHUNKED_PREFILL_SIZE ctx=$CONTEXT_LENGTH share=${_share:-?} ec=${_ec:-?} golden=$_gstat"
+  info "启动横幅: $_banner"
+  mkdir -p "$STATE_DIR" && echo "$(date -Is) serve $_banner" >> "$STATE_DIR/launch-banner.log"
+  # 审计 P2 修：head 有 golden 树而 worker 缺 → 该 rank 静默冷签、表决把空票覆写
+  # 回去（票决病理复活）——起栈前四机在场强一致断言。
+  if [[ -d "$AUTOTUNE_GOLDEN_DATA" ]]; then
+    for _wh in "${WORKER_HOSTS[@]}"; do
+      remote_on "$_wh" "test -d '$AUTOTUNE_GOLDEN_DATA'" >/dev/null 2>&1 \
+        || die "worker $_wh 缺 golden 树 $AUTOTUNE_GOLDEN_DATA（四 rank 表不一致=票决病理复活；先按 AUTOTUNE-GOLDEN-RUNBOOK.md rsync 对齐再起栈）"
+    done
+  fi
+
+  # 2026-09-21：fabric GID 洞预检（断电后 NCCL 崩环的 5 秒定向拦截；
+  # 修复步骤见 ~/w6-kit/FABRIC-GID-REPAIR-RUNBOOK.md，勿反复试靴）
+  if ! fabric_gid_preflight; then
+    die "fabric GID 洞在案（见上方 warn 明细）：NCCL 将在 modify_qp RTR 处崩（errno 61）。
+  修复=对洞口做 IP 环回重建（runbook §2 有逐口命令），修完 bash ~/w6-kit/s4_bench.sh verify 全绿再起栈。"
+  fi
+
+  # 2026-09-21 门禁统筹⑥：四机 GPU 时钟 burn 预检（PD 安全模式楔死拦截）。
+  # 02 实锤：断电后 SM 钉 721MHz ⇒ TP4 全体 prefill 减半（5000→2500），起栈 11 分钟
+  # + 全套 gate 都过了才发现。楔死机 warm reboot 修不了，必须拔墙上 AC 冷断电
+  # （runbook §7）。预检=栈停态跑 6s matmul，四机并行 ~15s，负载时钟 <1500MHz 即拦。
+  if ! gpu_clock_preflight; then
+    die "GPU 时钟楔死在案（见上方 warn 明细）：起栈只会得到半速栈。
+  修复=关机 → 拔墙上 AC 插座 1-2 分钟（拔机箱端 USB-C 无效；warm reboot 无效）→ 回线后
+  bash ~/w6-kit/powercycle_check.sh 全绿再起栈（GID 可能随断电再出洞）。"
+  fi
+
   local h need_share=0
   if [[ "$WEIGHTS_MODE" == "local" ]]; then
     info "WEIGHTS_MODE=local — workers read node-local weights, NFS skipped"
@@ -966,7 +1378,7 @@ cmd_serve() {
 
   push_spec_tables
   info "Starting workers (ranks 1..${#WORKER_IPS[@]}) first..."
-  local idx=0 wip wgid rank wmodel wextra _ov _ev
+  local idx=0 wip wgid rank wmodel wextra _ov _ev _wov_expect _f
   for h in "${WORKER_HOSTS[@]}"; do
     wip="${WORKER_IPS[$idx]}"
     wgid="${WORKER_GIDS[$idx]}"
@@ -984,11 +1396,22 @@ cmd_serve() {
     _ev="WORKER_EXTRA_MOUNTS_${rank}"
     [ -n "${!_ev:-}" ] && wextra="${!_ev}"
     # Prebuild overlay pairs locally (map keys/values only; no remote $vars).
+    # 2026-09-22 审计 P1-1：同时数出 head 侧预期挂载数，worker 必须精确等于它
+    # （覆盖三个盲区：worker 目录整体缺失 / 部分子集挂载 / 0 命中静默）。
     wov=""
+    _wov_expect=0
     for _f in "${!SGLANG_OVERLAY_MAP[@]}"; do
+      # 审计 P2：wov 用空格分词传递，key/value 带空格或冒号会截断值侧——
+      # 与其让远端报错误导的分叉计数，不如起跑前当面拒掉。
+      [[ "$_f" =~ [:\ ] || "${SGLANG_OVERLAY_MAP[$_f]}" =~ [:\ ] ]] &&
+        die "overlay map 条目 '$_f: ${SGLANG_OVERLAY_MAP[$_f]}' 含空格/冒号——wov 协议不支持，请改文件名或映射路径"
       wov+=" $_f:${SGLANG_OVERLAY_MAP[$_f]}"
+      [[ -f "$SGLANG_OVERLAY_DIR/$_f" ]] && _wov_expect=$((_wov_expect + 1))
     done
-    remote_on "$h" "
+    # 2026-09-20 H7：worker 起败即停。旧版不检查退出码 ⇒ head 照常启动、干等
+    # peer 直到 idle 超时（默认 600s），根因被超时掩埋。remote.py 传播远端 rc，
+    # 远端脚本自带 set -e（卷/权重/镜像缺失即败）。
+    if ! remote_on "$h" "
       set -e
       if [ '$WEIGHTS_MODE' != 'local' ]; then
         docker volume inspect $NFS_VOLUME >/dev/null || { echo 'MISSING docker volume $NFS_VOLUME on $h — run ./start.sh share'; exit 1; }
@@ -1011,23 +1434,49 @@ cmd_serve() {
       fi
       CODE_VOL=''
       if [ '${SGLANG_CODE_MOUNTS}' = 1 ]; then
+        # 2026-09-20 F4：dev 挂载源存在性前置——docker -v 对不存在的宿主目录会
+        # 静默建空目录，容器拿到空 adapter 后报错点离根因极远。缺目录直接拒启。
+        for _cd in \$HOME/dsv41-flash-dgxsparks/adapter \$HOME/dsv41-flash-dgxsparks/b12x-site; do
+          [ -d \"\$_cd\" ] || { echo \"SGLANG_CODE_MOUNTS=1 but \$_cd missing on $h — 拒启（空挂载会在容器内造成误导性错误）\"; exit 1; }
+        done
         CODE_VOL=\"-v \$HOME/dsv41-flash-dgxsparks/adapter:/opt/dsv41/adapter:ro -v \$HOME/dsv41-flash-dgxsparks/b12x-site:/opt/b12x:ro\"
       fi
       CACHE_VOL=''
       if [ '${SGLANG_CODE_MOUNTS}' = 1 ]; then
         CACHE_VOL=\"-v \$HOME/.cache:/root/.cache\"
       fi
+      # autotune golden 锁（审计 P1 修：与 head 的 golden_mounts 同一变量同一棵树——
+      # 旧硬编码 \$HOME 路径在 head 用 AUTOTUNE_GOLDEN_DATA 指 staging 树时会
+      # split-brain：head 冷签进 staging、worker 仍挂/写生产树）
+      GOLDEN_VOL=''
+      if [ -d '$AUTOTUNE_GOLDEN_DATA' ]; then
+        GOLDEN_VOL=\"-v $AUTOTUNE_GOLDEN_DATA:/root/.cache/sglang/flashinfer/autotune\"
+      fi
       MODEL_SRC='$NFS_VOLUME'
       if [ '$WEIGHTS_MODE' = 'local' ]; then MODEL_SRC='$wmodel'; fi
       WEXTRA='$wextra'
       OVERLAY_VOL=''
       if [ '${SGLANG_CODE_MOUNTS}' = 1 ]; then
+        # worker 侧 overlay 挂载（split-brain 双防线）：
+        # ① 2026-09-22 实锤修：2026-09-21 版把 \$wf 写进单引号（'$SGLANG_OVERLAY_DIR/\$wf'）
+        #   ⇒ 远端永远测试字面文件名“\$wf”⇒ worker 全部静默裸镜像（head 带补丁、
+        #   worker 不带），FIX-B/快照钩子在 worker 形同虚设、宿主侧 md5 验证还查不出。
+        #   修法=去内层单引号，\$wf/\$wrel 落到远端双引号内正常展开；路径无空格，
+        #   docker -v 裸传安全（与上方 CODE_VOL/GOLDEN_VOL 同风格）。
+        # ② 0 命中熔断：目录非空但 map 零命中=拒启，杜绝再次静默分叉。
+        _wov_n=0
         for wpair in $wov; do
           wf=\${wpair%%:*}; wrel=\${wpair#*:}
-          if [ -f \$HOME/dsv41-flash-dgxsparks/sglang-overlay/\$wf ]; then
-            OVERLAY_VOL=\"\$OVERLAY_VOL -v \$HOME/dsv41-flash-dgxsparks/sglang-overlay/\$wf:/sgl-workspace/sglang/\$wrel:ro\"
+          if [ -f \"$SGLANG_OVERLAY_DIR/\$wf\" ]; then
+            OVERLAY_VOL=\"\$OVERLAY_VOL -v $SGLANG_OVERLAY_DIR/\$wf:/sgl-workspace/sglang/\$wrel:ro\"
+            _wov_n=\$((\$_wov_n+1))
           fi
         done
+        _wov_have=\$(ls -1 \"$SGLANG_OVERLAY_DIR\" 2>/dev/null | wc -l)
+        if [ \"\$_wov_n\" -ne ${_wov_expect} ]; then
+          echo \"OVERLAY SPLIT-BRAIN: worker 挂载 \$_wov_n 个 != head 预期 ${_wov_expect} 个（目录缺失/子集/漂移；dir 内共 \$_wov_have 文件）— 拒启\" >&2
+          exit 1
+        fi
       fi
       docker run -d --name $WORKER_CTN \
         --network host --ipc host --privileged --cap-add IPC_LOCK --gpus all \
@@ -1039,13 +1488,30 @@ cmd_serve() {
         -v \$MODEL_SRC:/models/DeepSeek-V4.1-Flash:ro \
         \$WEXTRA \
         -v $WORKER_DIR/state:/state \
-        \$CACHE_VOL \
+        \$CACHE_VOL \$GOLDEN_VOL \
         \$NCCL_VOL \$NCCL_ENV \$SHIM_VOL \\
 $(worker_env_lines "$wip" "$wgid" "$rank")
         -e API_KEY=$(printf '%q' "$API_KEY") \\
         -e EXTRA_SGLANG_ARGS=$(printf '%q' "${EXTRA_SGLANG_ARGS:-}") \\
         $(printf '%q' "$IMAGE") run
-    "
+        # 审计 P2 修：远端 set -e 只拦 docker run 自身失败；容器创建成功后数秒内死
+        # （argparse/NCCL 崩）时 rc=0 照判过，head 干等 READY 超时才见尸。补 8s 存活断言。
+        sleep 8
+        docker inspect -f '{{.State.Running}}' $WORKER_CTN 2>/dev/null | grep -q true || { echo 'WORKER 容器起后即死（argparse/NCCL 崩？）尾 20 行：'; docker logs --tail 20 $WORKER_CTN 2>&1; exit 1; }
+    "; then
+      err "── worker rank $rank ($h) 启动失败（上方为远端输出）— 追抓容器现场辅助定位："
+      remote_on "$h" "docker ps -a --filter name=$WORKER_CTN --format 'table {{.Names}}\t{{.Status}}'; \
+docker inspect -f 'State.Error={{.State.Error}} ExitCode={{.State.ExitCode}}' $WORKER_CTN 2>/dev/null; \
+docker logs --tail 30 $WORKER_CTN 2>&1 || echo '(no container logs)'" || true
+      die "worker rank $rank ($h) 起败 ⇒ 停止启动（旧版会照常起 head 后干等 peer 至 idle 超时，根因被超时掩埋）"
+    fi
+    # 引擎门控键「意图==实效」断言（worker 侧，与 head 同一份期望表+同一段比较逻辑）：
+    # 从 head 侧 inspect 远端容器 env 再本地比对——远端 env 与 head 分叉（split-brain）
+    # 时立刻拒启，而不是等 FIX-B 在 worker 上静默不生效。
+    if ! engine_env_assert "worker rank $rank ($h)" \
+      "$(remote_on "$h" "docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' $WORKER_CTN 2>/dev/null")"; then
+      die "worker rank $rank ($h) 引擎门控键未送达容器 ⇒ 拒启（head/worker env 分叉或漏配）"
+    fi
     idx=$((idx + 1))
   done
 
@@ -1061,6 +1527,11 @@ $(worker_env_lines "$wip" "$wgid" "$rank")
     "$IMAGE" run)
   [[ -n "$head_cid" ]] || die "docker run produced no container id"
   info "head cid=${head_cid:0:12}"
+  # 引擎门控键「意图==实效」断言（2026-09-22）：EXTRA_DOCKER_ENV 里带门控键的 token
+  # 必须真的出现在容器 env 里，否则 FIX-B 这类门会在「以为开着」的假设下静默关闭。
+  engine_env_assert "head" \
+    "$(docker inspect "$HEAD_CTN" --format '{{range .Config.Env}}{{println .}}{{end}}')" \
+    || die "head 引擎门控键未送达容器 ⇒ 拒启（先看上面缺哪个 token；不改 env 就起=带缺陷跑）"
 
   mkdir -p "$LOG_DIR"
   : >"$SERVE_LOG"
@@ -1109,7 +1580,9 @@ $(worker_env_lines "$wip" "$wgid" "$rank")
   }
 
   local i=0 st
-  while (( i < ${READY_TIMEOUT:-360} )); do
+  # 审计 P2 修：实测起栈可达 11 分钟（楔死靴曾实锤），旧默认 360s 会把慢而健康的
+  # 引导 die 掉再被 Restart=always 拉起循环。抬到 900s（可在 env 文件钉 READY_TIMEOUT 覆盖）。
+  while (( i < ${READY_TIMEOUT:-900} )); do
     # Ready = boot.py printed its banner, i.e. /health answered AND the smoke test
     # and warm-up passed (WARMUP=0 / SKIP_SMOKE=1 skip them; then it is /health alone).
     if docker logs "$HEAD_CTN" 2>&1 | grep -q "^Ready: API on port ${PORT}" \
@@ -1166,11 +1639,22 @@ cmd_status() {
   echo "== head =="
   docker ps --filter "name=$HEAD_CTN" --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' || true
   echo
-  local h
+  # 2026-09-20 F2：权重检测与 serve/pack 同源取真路径。旧版一律测 $COMMON_MODEL
+  # （head 侧 NFS 导出视图）——local 模式下 02 的本地全量目录/03-04 的 NFS 视图
+  # 目录被误报 MISSING（假阴性）。rank 编号与 serve 段一致（idx+1，1 基）。
+  local h _wi _wov wsrc
+  _wi=1
   for h in "${WORKER_HOSTS[@]}"; do
-    echo "== worker $h =="
-    remote_on "$h" "docker ps --filter name=$WORKER_CTN --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' ; test -f $COMMON_MODEL/config.json && echo weights:OK || echo weights:MISSING" || warn "status SSH $h failed"
+    echo "== worker $h (rank $_wi) =="
+    if [[ "$WEIGHTS_MODE" == "local" ]]; then
+      _wov="WORKER_MODEL_DIR_${_wi}"
+      wsrc="${!_wov:-$WORKER_MODEL_DIR}"
+    else
+      wsrc="$COMMON_MODEL"
+    fi
+    remote_on "$h" "docker ps --filter name=$WORKER_CTN --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' ; test -f $wsrc/config.json && echo weights:OK || echo weights:MISSING" || warn "status SSH $h failed"
     echo
+    _wi=$((_wi + 1))
   done
   echo "== API =="
   local key
@@ -1223,7 +1707,7 @@ cmd_gate() {
 }
 
 usage() {
-  sed -n '2,24p' "$0" | tr -d '#'
+  sed -n '2,28p' "$0" | tr -d '#'
 }
 
 CMD="${1:-serve}"
