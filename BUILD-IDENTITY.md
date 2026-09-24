@@ -33,7 +33,7 @@ is the same content; its identity is re-derivable from the archive alone.
 | 0.2.4 | `e4fe9dc13017e5d7` | 125 | last distribution before the OOM-era rebuild |
 | 0.2.5 / 0.2.6 | — | — | intermediate test builds; not the current base |
 | 0.2.7 | `b00ea2f8da530bd9` | 1 | **base of 0.2.8** |
-| 0.2.8pre | `b177409e539ea38e` | 3 | frozen intermediate, never promoted |
+| 0.2.8pre | `b177409e539ea38e` | 3 | frozen intermediate, never promoted (`overlay_files` / `overlay_map_md5` = `49` / `3b15533b2245664b`) |
 | **0.2.8** | **`4cca364c46778423`** | **3** | current production; supersedes 0.2.8pre the same day |
 
 ⚠️ **The identity changes between builds by design** — every rebuild re-hashes the layer
