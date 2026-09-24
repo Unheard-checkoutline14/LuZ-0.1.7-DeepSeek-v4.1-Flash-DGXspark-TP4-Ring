@@ -18,6 +18,10 @@
 | `EXTRA_DOCKER_ENV` | 模板 32 子键 · 生产 32 子键 | **32/32 逐值一致** |
 | `EXTRA_SGLANG_ARGS` | 12 token | **逐 token 一致** |
 
+> 口径：**73 = 75 个顶层 `KEY=` 行 − 2 个复合键**（`EXTRA_DOCKER_ENV` /
+> `EXTRA_SGLANG_ARGS`，二者单列于下两行）。§5.1 的检查器报的 **75** 是含复合键的
+> 总数，两处不矛盾。
+
 ⇒ **除站点相关键外，模板与生产没有差异。** 照模板起栈得到的优化集与 0.2.8 生产相同。
 
 > 本文替换了此前模板里那句失效的指针：旧模板声称由
@@ -55,9 +59,21 @@ TP4 起栈。**不要**为了让 TP4 好看而改它——那会改掉 3-Spark �
 |---|---|---|
 | `HEAD_IP` / `WORKER_IPS` / `WORKER_HOSTS` / `WORKER_USER` | 占位符 | 节点地址与账户 |
 | `MODEL_DIR` / `WORKER_MODEL_DIR{,_1,_2,_3}` / `COMMON_MODEL` / `ENGRAM_DIR` / `WORKER_DIR` | `$HOME/...` | 权重与工作目录布局 |
-| `ENG_SH47` / `ENG_SH48` / `WORKER_EXTRA_MOUNTS_2` / `WORKER_EXTRA_MOUNTS_3` | `$HOME/...` | Engram 两个本地分片的挂载 |
+| `ENG_SH47` / `ENG_SH48` | `$HOME/...` | Engram 两个本地分片的**路径**——⚠️ **本仓启动器不读它**（见下） |
+| `WORKER_EXTRA_MOUNTS_2` / `WORKER_EXTRA_MOUNTS_3` | `$HOME/...` | Engram 两个本地分片的挂载——**实际生效的那一路** |
 | `PEER_HCA_RANK0..3` | `<PINNING>` | **每 rank 的对端 HCA 对**；4 节点环网上它等价于物理布线图 |
 | `API_KEY` | 空（自动生成） | 生产为 `chmod 600` 的 `$STATE_DIR/api-key` |
+
+> **更正（2026-09-24 第二轮）**：本文早前把 `ENG_SH47` / `ENG_SH48` 与
+> `WORKER_EXTRA_MOUNTS_*` 合列，描述为"Engram 两个本地分片的挂载"。**这个描述是错的**：
+> `ENG_SH47/48` 被每一个 `.env.tp4*` 变体写入（生产 `.env.tp4` 亦在），但**没有任何
+> 启动器读它**——`git log -S'ENG_SH' -- start.sh` 在全部历史中为空，即它从未被
+> `start.sh` 消费过；部署根内也无其他 `.sh`/`.py` 提及。真正的挂载由
+> `WORKER_EXTRA_MOUNTS_2/3` 以 `-v` 完成，那两个键**是**生效的。
+>
+> 保留它们在模板里，是因为模板的职责是**忠实记录生产键集**；但请勿以为设了它们
+> 会产生效果。这一类（"键在文件里正确、却没有任何通道到达引擎"）已由
+> `scripts/check_env_coverage.py` 落成 fail-closed 检查，见 §5.1。
 
 `PEER_HCA_RANK*` 的推导步骤写在模板注释里（从一次 `NCCL_DEBUG=INFO` 首靴里读
 `NET/IB/<idx>=<hca>`，再翻译成对端 rank 编号）。`./start-tp4.sh ncclcheck` 可验证结果。
@@ -130,6 +146,36 @@ diff /tmp/prod.keys /tmp/tmpl.keys
 
 `EXTRA_DOCKER_ENV` / `EXTRA_SGLANG_ARGS` 是复合行，需按空白拆成子键/flag 再比，
 否则整行字符串不同会被误判成"配置不同"。
+
+### 5.1 另一件必须查的事：模板的键，启动器真的读得到吗？
+
+§5 只证明**两侧文件一致**。一致的文件仍可能有一半不生效——键在文件里是对的，但
+启动器从不读它，于是不报错、不告警、日志里也没有，只是行为和你以为的不一样。
+本仓历史上出过两次这个病：`.env.tp4-600k` 把 `DSV41_IDLE_RELEASE=1` 写成**顶层**
+变量（该键只在 `EXTRA_DOCKER_ENV` 内才进容器）；一次 SPF 臂里 `EXTRA_SGLANG_ARGS`
+的传值被吞、引擎仍跑默认调度，其后所有测量测的都是另一套配置。§5 的 diff
+**一次都发现不了这两件事**。
+
+```bash
+python3 scripts/check_env_coverage.py             # default: repo root
+python3 scripts/check_env_coverage.py --selftest  # scanner regression only
+```
+
+判定按四条通道，四条都不沾的键 ⇒ **扫描失败**：
+
+| 通道 | 含义 |
+|---|---|
+| **A** | 键名出现在 `start.sh` 的**代码**里（`-e` 列表 / `${KEY}` 读取 / 白名单分支）。**注释不算** —— 注释是让一个键"看起来接好了"最省事的办法，而启动器仍然不会读它 |
+| **B** | 该键是 `EXTRA_DOCKER_ENV` 的**子键**（整值透传，启动器无需知道它存在） |
+| **C** | 属于启动器**运行时拼出**的编号族：`WORKER_MODEL_DIR_2` 经 `WORKER_MODEL_DIR_${rank}` 到达。整词文本搜索看不见这类，把 8 个键报成"惰性"就是假警报 —— 而一个乱叫的检查器会被学会跳过，代价比它抓到的高 |
+| **D** | 在脚本内 `DECLARED_UNUSED` 里**带证据**声明 |
+
+当前结果（0.2.8 定板）：**63 按名 + 8 编号族 + 2 声明未用 + 2 通道载体 = 75 顶层键，`PASS`**。
+两个声明未用者即 `ENG_SH47` / `ENG_SH48`（见 §3 的更正）。
+
+> 为什么通道 A 可以忽略注释：`start.sh` 向容器传 env 只有**显式 `-e` 列表 +
+> `EXTRA_DOCKER_ENV` 值**两条路 —— 无 `env \|`、无 `--env-file`、无整表导出
+> （`grep -c 'env |' start.sh` 为 0）。所以上面四条就是全部。
 
 ---
 
