@@ -27,7 +27,10 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG="${DSV41_LOG:-$ROOT/logs-tp4/dsv41.log}"
+# 2026-09-21 白盒修正：旧默认 logs-tp4/dsv41.log 是陈旧目录（现役=logs/dsv41.log），
+# 靴态判定读错文件；DSV41_LOG 显式指定仍优先
+LOG="${DSV41_LOG:-$ROOT/logs/dsv41.log}"
+[ -f "$LOG" ] || LOG="$ROOT/logs-tp4/dsv41.log"
 KEY="${DSV41_API_KEY:-$(grep -m1 '^API_KEY=' "$ROOT/.env.tp4" 2>/dev/null | cut -d= -f2-)}"
 DO_BENCH=0
 [ "${1:-}" = "--bench" ] && DO_BENCH=1
@@ -127,7 +130,11 @@ if [ "$DO_BENCH" = "1" ]; then
     echo "$out"
     tps="$(echo "$out" | awk '/^ *1 /{print $4}')"
     ttft="$(echo "$out" | awk '/^ *1 /{print $2}')"
-    if [ -n "$tps" ] && awk "BEGIN{exit !($tps < 20)}"; then
+    if [ -z "$tps" ]; then
+      # 审计 P1 修：解析空（bench 超时被杀/输出格式漂移）恰是 --bench 要抓的挂死
+      # 形态——旧逻辑 `[ -n ]` 短路后走 else 假绿「吞吐正常」。
+      say '[✗]' "bench 无有效输出（超时/格式漂移——raw: $(echo "$out" | tr '\n' ' ' | cut -c1-120)）⇒ 按不可信判"; fail=1
+    elif awk "BEGIN{exit !($tps < 20)}"; then
       say '[✗]' "bench c1=${tps} t/s (TTFT ${ttft}) < 20 ⇒ **判慢靴，重启**（配置不动）"; fail=1
     else
       say '[+]' "bench c1=${tps} t/s (TTFT ${ttft}) ⇒ 吞吐正常"
@@ -144,6 +151,28 @@ echo
   fi
   if [ "$fail" = 0 ] && grep -q "majority-vote adopted" <<<"$_DL"; then
     echo "[+] autotune tactic 已钉住（多数表决采纳，无重抽）"
+  fi
+  # 2026-09-21 门禁统筹④：warmup 墙钟地板（R9 慢签 warmup 663s vs 健康 44-66s）
+  # + autotune golden 在役正断言（golden 锁下四 rank 同表⇒无表决行，旧的
+  # majority-vote 正断言不再出现属预期；改查挂载）。慢 warmup 的两大史因=
+  # tactic 慢签（autotune）与 02 型时钟楔死（PD 安全模式，runbook §7）。
+  _wu=$(grep -oE 'Warm-up done in [0-9]+s' <<<"$_DL" | grep -oE '[0-9]+' | tail -1)
+  if [ -z "$_wu" ]; then
+    # 审计 P2 修：docker logs 不可读（|| true 吞错）或格式漂移时本检查一行不出——
+    # 既不 FAIL 也不留痕。无法判定=FAIL。
+    say '[✗]' "warmup 墙钟地板无法判定（docker logs 不可读/无 Warm-up done 行——新镜像改了日志格式？）"; fail=1
+  elif [ "$_wu" -gt 300 ]; then
+      say '[✗]' "warmup=${_wu}s >300s 地板 —— 慢靴。分诊：①docker logs 查 majority-vote/tuning-from-scratch（autotune 签）②~/w6-kit/guard/guardctl.sh doctor 的 GPU burn 探针（PD 时钟楔死：修复=拔墙上 AC 冷断电）"
+      fail=1
+    else
+      say '[+]' "warmup=${_wu}s ≤300s（健康带 44-66s；R9 慢签 663s）"
+    fi
+  if docker inspect -f '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' dsv41-head 2>/dev/null | grep -q 'autotune-golden/data'; then
+    echo "[+] autotune golden 在役（宿主钉住表挂载，表决 no-op 属预期）"
+  else
+    # 审计 P2 修：正断言 only——未挂载时一行不出=锁定被绕过而无人知（与 gate 的
+    # 强断言分工：此处留痕即可，FAIL 由 gate 判）
+    echo "[!] autotune golden 未挂载（锁定被绕过——gate 将判 FAIL；确认非有意停用）"
   fi
   if [ "$fail" = 0 ]; then echo "[+] BOOT SIGNATURE OK"; else
       echo '[✗] BOOT SIGNATURE FAIL —— 质量门查不出这个；处置见本脚本头部注释'

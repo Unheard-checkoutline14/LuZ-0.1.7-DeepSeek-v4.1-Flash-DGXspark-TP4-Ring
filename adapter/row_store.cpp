@@ -71,6 +71,15 @@ struct Store {
   int packed_fd = -1;                 // repacked owned rows, weight+scale adjacent
   std::mutex locks[256];
   std::atomic<uint64_t> hits{0}, misses{0}, reads{0};
+  // Stats v2 (2026-09-20, Z2): replacement pressure, working-set breadth and
+  // per-n-gram-order attribution. Slot = id position modulo the caller's
+  // [tokens, n_hash_cols] flatten width: each order owns a fixed column, so
+  // per-slot counters are per-order counters once Python maps col -> order
+  // (order = col + 2). slot_mod==0 (legacy caller) disables the split.
+  std::atomic<uint64_t> evictions{0}, unique_ids{0}, slot_mod_seen{0};
+  std::atomic<uint64_t> slot_hits[16] = {}, slot_misses[16] = {};
+  uint8_t *seen = nullptr;              // one bit per owned row (unique_ids)
+  size_t seen_bytes = 0;
 };
 
 struct Work {
@@ -78,6 +87,9 @@ struct Work {
   const int64_t *ids;
   uint8_t *weights, *scales;
   uint64_t count;
+  // Appended field (ABI-safe: old callers never read past `count`; the
+  // Python mirror grows in the same image). 0 = per-slot stats off.
+  uint64_t slot_mod = 0;
 };
 
 static void fail(const char *reason) {
@@ -106,7 +118,10 @@ static void read_bytes(Store *s, uint64_t offset, uint8_t *out, size_t length) {
 }
 
 // Fetch one owned row into `row` (264 B), consulting and filling the cache.
-static void fetch_row(Store *s, uint64_t id, uint8_t *row) {
+// slot < 16 books the hit/miss into the per-order split (see Store).
+static void fetch_row(Store *s, uint64_t id, uint8_t *row,
+                      uint64_t slot = UINT64_MAX) {
+  const bool slot_on = slot < 16;
   const uint64_t set = s->sets ? id % s->sets : 0;
   std::mutex &lock = s->locks[set % 256];
   if (s->sets) {
@@ -116,6 +131,7 @@ static void fetch_row(Store *s, uint64_t id, uint8_t *row) {
       if (s->keys[base + w] == id + 1) {
         std::memcpy(row, s->cache + (base + w) * kRowBytes, kRowBytes);
         s->hits.fetch_add(1, std::memory_order_relaxed);
+        if (slot_on) s->slot_hits[slot].fetch_add(1, std::memory_order_relaxed);
         return;
       }
     }
@@ -136,10 +152,31 @@ static void fetch_row(Store *s, uint64_t id, uint8_t *row) {
     }
   }
   s->misses.fetch_add(1, std::memory_order_relaxed);
+  if (slot_on) s->slot_misses[slot].fetch_add(1, std::memory_order_relaxed);
+  // Working-set breadth: count first-ever fetches of owned rows. Bit-level
+  // test-and-set via CAS (two concurrent misses of the same row count once).
+  if (s->seen) {
+    const uint64_t local = id - s->row_lo;
+    uint8_t *p = s->seen + (local >> 3);
+    const uint8_t mask = uint8_t(1u << (local & 7));
+    uint8_t old = __atomic_load_n(p, __ATOMIC_RELAXED);
+    if (!(old & mask)) {
+      while (!__atomic_compare_exchange_n(
+          p, &old, uint8_t(old | mask), false,
+          __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+        if (old & mask) break;  // lost the race: the other thread counted it
+      }
+      if (!(old & mask))
+        s->unique_ids.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
   if (s->sets) {
     std::lock_guard<std::mutex> guard(lock);
     const uint64_t base = set * s->ways;
     const uint64_t w = s->victim[set] % s->ways;
+    // keys hold id+1, so a non-zero victim slot is a live row being evicted.
+    if (s->keys[base + w] != 0)
+      s->evictions.fetch_add(1, std::memory_order_relaxed);
     s->victim[set] = uint8_t((s->victim[set] + 1) % s->ways);
     std::memcpy(s->cache + (base + w) * kRowBytes, row, kRowBytes);
     s->keys[base + w] = id + 1;
@@ -148,6 +185,9 @@ static void fetch_row(Store *s, uint64_t id, uint8_t *row) {
 
 static void serve(Work *work, uint64_t begin, uint64_t end) {
   Store *s = work->store;
+  if (work->slot_mod > 16) work->slot_mod = 0;  // wide legacy layouts: no split
+  if (work->slot_mod) s->slot_mod_seen.store(work->slot_mod,
+                                             std::memory_order_relaxed);
   for (uint64_t i = begin; i < end; ++i) {
     const int64_t id = work->ids[i];
     if (id < 0 || uint64_t(id) >= s->rows) fail("row ID out of bounds");
@@ -157,7 +197,8 @@ static void serve(Work *work, uint64_t begin, uint64_t end) {
       continue;
     }
     uint8_t row[kRowBytes];
-    fetch_row(s, uint64_t(id), row);
+    const uint64_t slot = work->slot_mod ? i % work->slot_mod : UINT64_MAX;
+    fetch_row(s, uint64_t(id), row, slot);
     std::memcpy(work->weights + i * kWeightBytes, row, kWeightBytes);
     std::memcpy(work->scales + i * kScaleBytes, row + kWeightBytes, kScaleBytes);
   }
@@ -371,6 +412,16 @@ extern "C" void row_store_stats(Store *s, uint64_t *out) {
   out[8] = s->packed_fd >= 0 ? 1 : 0;
   Pool *workers = pool();
   out[7] = workers ? workers->size() + 1 : 1;
+  // Stats v2 (buffer must hold 45 words; Python allocates the same): the
+  // magic at out[44] lets a v2 caller tell a legacy 9-word .so (leaves 0).
+  out[9] = s->evictions.load();
+  out[10] = s->unique_ids.load();
+  out[11] = s->slot_mod_seen.load();
+  for (uint64_t k = 0; k < 16; ++k) {
+    out[12 + 2 * k] = s->slot_hits[k].load();
+    out[13 + 2 * k] = s->slot_misses[k].load();
+  }
+  out[44] = 0x454E4752ULL;  // 'ENGR'
 }
 
 // Attach a shard produced by scripts/pack_engram.py: this rank's owned rows,
@@ -409,6 +460,14 @@ extern "C" void row_store_range(Store *s, uint64_t lo, uint64_t hi) {
   if (s->scales && (lo != s->row_lo || hi != s->row_hi))
     fail("ownership range changed after the scale shard was pinned");
   s->row_lo = lo; s->row_hi = hi;
+  // Stats v2: unique-row bitmap over this rank's owned range (zero-filled,
+  // anonymous -- test_and_set under the miss path's unlocked read is fine:
+  // double-counting is prevented by the bit itself, not a lock).
+  s->seen_bytes = (hi - lo + 7) >> 3;
+  s->seen = static_cast<uint8_t *>(
+      mmap(nullptr, s->seen_bytes, PROT_READ | PROT_WRITE,
+           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+  if (s->seen == MAP_FAILED) { s->seen = nullptr; s->seen_bytes = 0; }
   if (!s->scales && hi > lo && env_flag("DSV41_RESIDENT_SCALES", true) && !pin_scales(s)) {
     std::fprintf(stderr, "Engram: could not pin the owned scale shard (%llu rows); "
                  "misses will cost a second read\n",
@@ -425,5 +484,6 @@ extern "C" void row_store_close(Store *s) {
     munmap(s->keys, s->slots * sizeof(uint64_t));
     munmap(s->victim, s->sets);
   }
+  if (s->seen) munmap(s->seen, s->seen_bytes);
   close(s->fd); delete s;
 }

@@ -12,7 +12,8 @@ reserved memory is host memory: a 34k-token prompt kept 1-1.5 GB, 64k exhausted 
 head. expandable_segments would coalesce it but produces NaN logits on this stack.
 
 This hook calls torch.cuda.empty_cache() after every extend forward whose longest
-sequence is at least DSV41_PREFILL_EMPTY_CACHE_TOKENS (default 8192): the unused
+sequence is at least DSV41_PREFILL_EMPTY_CACHE_TOKENS (default 0 = disabled since
+0.2.7; set 8192 to re-arm the pre-0.2.7 behaviour): the unused
 cached blocks go back to the driver, the next chunk allocates fresh, and the peak is
 one chunk's live set instead of the sum over chunks. Decode CUDA graphs live in
 private pools and are untouched. Cost: one device sync and a few cudaMalloc/cudaFree
@@ -27,7 +28,11 @@ logger = logging.getLogger(__name__)
 
 
 def install(module):
-    threshold = int(os.environ.get('DSV41_PREFILL_EMPTY_CACHE_TOKENS', '8192'))
+    # Default flipped to 0 in 0.2.7 (2026-09-21): on GB10's unified memory the
+    # re-cudaMalloc tax costs ~2x on long-prefill tiers (F6 verdict), so the
+    # hook is now opt-in. Prod sets the env explicitly in .env.tp4; the old
+    # default '8192' silently re-armed it whenever EXTRA_DOCKER_ENV went missing.
+    threshold = int(os.environ.get('DSV41_PREFILL_EMPTY_CACHE_TOKENS', '0'))
     if threshold <= 0:
         return
     cls = module.ModelRunner

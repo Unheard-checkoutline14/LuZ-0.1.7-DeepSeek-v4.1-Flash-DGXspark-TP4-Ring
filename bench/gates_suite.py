@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # dsv41 质量门禁套件: needle 梯度 / Hangul corruption / 终止性 / code-gate
-import argparse, json, re, time, urllib.request
+import argparse, json, re, time, urllib.error, urllib.request
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--base', default='http://127.0.0.1:8899/v1')
@@ -55,7 +55,14 @@ if args.needle:
     for depth, seed in [(30000, 21), (229000, 22), (470000, 23)]:
         needle = f'The secret code word is PELICAN-{seed}.'
         prompt = haystack(depth, needle) + '\nWhat is the secret code word? Answer with the code word only.'
-        r = ask([{'role': 'user', 'content': prompt}], temperature=0, max_tokens=30)
+        try:
+            r = ask([{'role': 'user', 'content': prompt}], temperature=0, max_tokens=30)
+        except urllib.error.HTTPError as e:
+            # 超本栈 ctx 上限被拒 = 安全垫生效（终态 ctx=147456: 229K/470K 档预期走此路）
+            if e.code == 400:
+                print(f'needle {depth}: HTTP Error 400 rejected (prompt over ctx cap) EXEMPT', flush=True)
+                continue
+            raise
         ok = f'PELICAN-{seed}' in r['content']
         print(f'needle {depth}: prefill={r["prompt_tokens"]} wall={r["wall"]:.1f}s '
               f'({r["prompt_tokens"] / r["wall"]:.0f} t/s) answer={r["content"][:40]!r} '

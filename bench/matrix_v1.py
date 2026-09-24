@@ -89,8 +89,25 @@ def one(args):
     return result
 
 
+def flush_cache():
+    """逐格 flush radix —— 2026-09-21 事故教训：不 flush 连跑多格，KV/常驻跨格累积，
+    c16 大档把主机 MemAvailable 压破 oom-gate 3GiB 地板 ⇒ 栈被止损杀（errs=16 全灭）。
+    prv3_collector 同款语义：flush 失败=中止（warn 后继续=跨格 radix 复用+内存累积双坑）。"""
+    req = urllib.request.Request('http://127.0.0.1:8899/flush_cache', data=b'', method='POST',
+                                 headers={'Authorization': 'Bearer ' + key})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            r.read()
+        return True
+    except Exception as e:
+        print(f'flush_cache FAILED: {e!r} —— 中止（防跨格累积）', flush=True)
+        return False
+
+
 for size in sizes:
     for c in concurrencies:
+        if not flush_cache():
+            sys.exit(3)
         wave_start = time.monotonic()
         with concurrent.futures.ThreadPoolExecutor(c) as pool:
             records = list(pool.map(one, [(size, i, wave_start) for i in range(c)]))
@@ -98,5 +115,7 @@ for size in sizes:
         out.write_text(json.dumps(records, indent=1))
         errs = sum(1 for r in records if r.get('error'))
         print(f'{size}-c{c}: done errs={errs}', flush=True)
+        if c >= 8 and size >= 65536:
+            flush_cache()  # 大格收尾再 flush 一次，防 decode 期 KV 滞留压下一格
 
 print('FOLDER=' + str(folder), flush=True)

@@ -23,17 +23,29 @@ _lib.row_store_attach_packed.argtypes = [P, C.c_char_p, U]
 _lib.row_store_attach_packed.restype = C.c_int
 
 class Work(C.Structure):
-    _fields_ = [('store', P), ('ids', P), ('weights', P), ('scales', P), ('count', U)]
+    _fields_ = [('store', P), ('ids', P), ('weights', P), ('scales', P), ('count', U),
+                # stats v2 (2026-09-20): flatten width of the caller's
+                # [tokens, n_hash_cols] id tensor -> per-slot (= per-n-gram-order)
+                # hit/miss split in the .so. 0 disables. ABI-safe append.
+                ('slot_mod', U)]
 
 _STORES = []
 
+# Stats ABI v2: buffer is 45 words; a legacy 9-word .so leaves the tail zeroed
+# (ctypes zero-fills), which _stats reports via extended=False.
+_STATS_MAGIC = 0x454E4752  # 'ENGR'
+
 def _stats(store):
-    out = (U * 9)()
+    out = (U * 45)()
     _lib.row_store_stats(store, out)
-    hits, misses, reads, cache_bytes, slots, scale_bytes, ways, threads, packed = out
-    return dict(hits=hits, misses=misses, reads=reads, cache_bytes=cache_bytes,
-                slots=slots, scale_bytes=scale_bytes, ways=ways, threads=threads,
-                packed=bool(packed))
+    d = dict(hits=out[0], misses=out[1], reads=out[2], cache_bytes=out[3],
+             slots=out[4], scale_bytes=out[5], ways=out[6], threads=out[7],
+             packed=bool(out[8]))
+    d['extended'] = out[44] == _STATS_MAGIC
+    if d['extended']:
+        d.update(evictions=out[9], unique_ids=out[10], slot_mod=out[11],
+                 per_slot=[(out[12 + 2*k], out[13 + 2*k]) for k in range(16)])
+    return d
 
 def _report():
     """Miss rate and read volume decide decode latency here; log them."""
@@ -58,11 +70,35 @@ def _report():
                 total = hits + misses
                 if not total:
                     continue
-                log.info('Engram layer=%s lookups=%s hit_rate=%.1f%% reads=%s '
-                         'cache=%.1fGiB(%s-way) scales=%.1fGiB threads=%s packed=%s',
-                         layer_id, total, 100.0*hits/total, now['reads']-was['reads'],
+                # slots==0 means budget==0: the C hit path is skipped entirely
+                # and hit_rate would print a permanent, misleading 0.0%.
+                hit_rate = ('%.1f%%' % (100.0*hits/total)
+                            if now['slots'] else 'n/a (cache off)')
+                extra = ''
+                if now.get('extended') and was.get('extended'):
+                    sm = now['slot_mod']
+                    if sm:
+                        parts = []
+                        for k in range(sm):
+                            dh = now['per_slot'][k][0] - was['per_slot'][k][0]
+                            dm = now['per_slot'][k][1] - was['per_slot'][k][1]
+                            dt = dh + dm
+                            if dt:
+                                # slot == hash column of a [T, n_hash_cols]
+                                # flatten -> n-gram order = column + 2
+                                parts.append('%d-gram=%.1f%%(%s)'
+                                             % (k + 2, 100.0*dh/dt, dt))
+                        if parts:
+                            extra = ' orders=[%s]' % ', '.join(parts)
+                    extra += ' evictions=%s unique_rows=%s' % (
+                        now['evictions'] - was['evictions'],
+                        now['unique_ids'] - was['unique_ids'])
+                log.info('Engram layer=%s lookups=%s hit_rate=%s reads=%s '
+                         'cache=%.1fGiB(%s-way) scales=%.1fGiB threads=%s packed=%s%s',
+                         layer_id, total, hit_rate, now['reads']-was['reads'],
                          now['cache_bytes']/2**30, now['ways'],
-                         now['scale_bytes']/2**30, now['threads'], now['packed'])
+                         now['scale_bytes']/2**30, now['threads'], now['packed'],
+                         extra)
     threading.Thread(target=loop, daemon=True, name='engram-stats').start()
 
 def _register_store(store, layer_id):
@@ -177,6 +213,11 @@ def install(module):
         if work_key not in self._works:
             self._works[work_key] = Work(self._store, ids.data_ptr(), w.data_ptr(), s.data_ptr(), count)
         work = self._works[work_key]
+        # stats v2: flatten width of [tokens, n_hash_cols] -> per-order split.
+        # Constant per shape; writing it here (also under graph capture) keeps
+        # replays attributed exactly like the captured call.
+        work.slot_mod = (indices.numel() // indices.shape[0]
+                         if indices.dim() > 1 and indices.shape[0] > 0 else 0)
         ids[:count].copy_(indices.reshape(-1), non_blocking=True)
         error = _cuda.cudaLaunchHostFunc(torch.cuda.current_stream().cuda_stream,
             C.cast(_lib.row_store_lookup, P), C.addressof(work))
