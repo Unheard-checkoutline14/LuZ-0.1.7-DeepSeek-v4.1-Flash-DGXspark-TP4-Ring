@@ -1,7 +1,7 @@
 ==========================================================================
 FILE
 ==========================================================================
-  path              : C:/Users/novAI/WorkBuddy/集群部署/releases/LuZ-0.2.8-dsv41-tp4-dgxspark.tar
+  path              : ./releases/LuZ-0.2.8-dsv41-tp4-dgxspark.tar
   bytes             : 14,002,663,936
   compression       : none  (profile)
   profile           : identity 4cca364c46778423 | layers 3 | md5 a9d4cdf932203f173df7556aa511fee1

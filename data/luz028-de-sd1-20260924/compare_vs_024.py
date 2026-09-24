@@ -11,7 +11,9 @@ Verdict bands (user ruling 2026-09-24): anchor = 0.2.4 baseline, drift band
 import json, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BASE = r"C:/Users/novAI/WorkBuddy/集群部署/_v41_r2/clean-clone/data/dev3-v18-20260920/de_v3_matrix.json"
+# Baseline matrix of the 0.2.4-era SD-1 board, resolved relative to this file so the
+# script runs from a fresh clone on any machine:
+BASE = os.path.join(os.path.dirname(HERE), "dev3-v18-20260920", "de_v3_matrix.json")
 RE = os.path.join(HERE, "de_v3_matrix.json")
 TYPES = ["structured", "prose", "code", "json"]
 CONCS = [1, 2, 4, 8, 16]

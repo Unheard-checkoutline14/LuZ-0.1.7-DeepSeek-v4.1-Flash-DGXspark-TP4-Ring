@@ -44,6 +44,14 @@ Scanning discipline (learned the hard way, repeatedly)
   classification table in `benchmarks/README.md` included.  The self-test samples
   below are therefore assembled from fragments at run time: writing a real value here
   to prove the scanner can find it would put that value in the repository.
+- **2026-09-24, and the rule above applied to itself.**  Two files already in the tree
+  were found carrying the operator's *local* absolute path (a drive letter, `Users`, a
+  real account name, and the tool's own directory), and a report being prepared for
+  publication carried an address inside the management /24 that `mgmt-ip` did not
+  enumerate.  Every path pattern in this file assumed POSIX and every address pattern
+  enumerated hosts, so neither class was visible to it.  Classes `windows-user-path`
+  and `mgmt-subnet-ip` were added after masking all three.  When you add a class, add
+  its self-test case in the same edit -- the fixtures below are the regression.
 - `zurih`, `?pwd=luzi` and `/opt/aicad-prod` are deliberate and load-bearing
   (attribution, published share code, published project name).  Do not "clean" them.
 """
@@ -75,6 +83,25 @@ PATTERNS = [
 
     ("peer-hca-pinning-map", r"PEER_HCA_RANK[0-9]\s*=\s*\"[^\"]*roce",
      "topology-fingerprint", "blocker"),
+
+    # Added 2026-09-24 (see the docstring).  Two design notes:
+    #   * the trailing separator is deliberately NOT required, unlike
+    #     `username-in-path` -- a bare drive/Users/<account> is itself the
+    #     disclosure, and requiring the separator is how a leak escapes.
+    #   * the lookahead whitelists the accounts that are generic *by construction*
+    #     (Windows ships `Public` and `Default`; the rest mirror the /home list).
+    ("windows-user-path",
+     r"[A-Za-z]:[\\/]{1,2}(?i:Users)[\\/]{1,2}"
+     r"(?!(?i:Public|Default|Example|User|Username|You|Your|Shared)\b)"
+     r"[A-Za-z][A-Za-z0-9._-]*",
+     "identity", "blocker"),
+
+    # Added 2026-09-24.  `mgmt-ip` above enumerates the specific node and NFS hosts
+    # that were in front of us when the class was written; it is blind to any other
+    # host on the same management /24, which is the same disclosure.  The published
+    # repo carries its own generic scheme (10.0.0.x) precisely so that nothing from
+    # the real range has to appear -- so no address in it is publishable.
+    ("mgmt-subnet-ip", r"\b192\.168\.5\.[0-9]{1,3}\b", "network", "blocker"),
 
     # ---- deliberately retained -------------------------------------------
     # C3 was ruled must-mask by the 09-17 audit and re-classified benign on
@@ -138,6 +165,13 @@ _AS = "AS" + "1217" + "hf"
 _HCA = "roce" + "p1s0f0"
 _NIC = "enP" + "7s7"
 _IP = "192.168." + "5." + "186"
+# 2026-09-24 classes: both separator styles, the bare (separator-less) form, a
+# whitelisted generic account that must NOT match, and a host on the management /24
+# that the older host-enumerating pattern could not see.
+_WIN = "C:" + "/Us" + "ers/" + "some" + "one/"
+_WIN_B = "D:" + "\\" + "Us" + "ers" + "\\" + "some" + "one" + "\\"
+_WIN_OK = "C:" + "/Us" + "ers/" + "exa" + "mple/work"
+_MGMT = "192.168." + "5." + "77"
 
 SELFTEST_NO_MATCH = [
     # numeric coincidence: a memory size shaped like an address fragment
@@ -153,6 +187,9 @@ SELFTEST_NO_MATCH = [
     # generic /home paths that carry no identity
     "https://example.invalid/home/user/index.html",
     "see /home/appuser/config for the template",
+    # generic Windows accounts carry no identity either (same argument as /home/user)
+    _WIN_OK,
+    "default profile lives under C:" + "/Us" + "ers/" + "Public",
 ]
 SELFTEST_MUST_MATCH = [
     ("peer-hca-pinning-map",
@@ -162,6 +199,11 @@ SELFTEST_MUST_MATCH = [
     ("username-in-path", "SB=" + "/home/" + "some" + "one/state"),
     ("mgmt-ip", "upstream at " + _IP + ":8001"),
     ("sudo-password", "pw " + _AS + " end"),
+    ("windows-user-path", "log written to " + _WIN + "state/app.log"),
+    ("windows-user-path", "out=" + _WIN_B + "out.bin"),
+    # the separator-less form must match too: a bare path is already the disclosure
+    ("windows-user-path", _WIN.rstrip("/")),
+    ("mgmt-subnet-ip", "client at " + _MGMT + " opened a stream"),
 ]
 
 # `.workbuddy/` is skipped deliberately. It is gitignored scratch space -- run logs,
