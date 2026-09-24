@@ -54,7 +54,7 @@ gateway-vs-direct arm in FINAL-METRICS §6) is now in the repo:
   streams are kept alive through the engine's long prefill silences), TTFT budget,
   backpressure admission, equivalence dedup, disconnect propagation, `/gw/metrics`,
   optional `enable_thinking` injection.
-- `concurrency-proxy-v2.env.example` — all 13 knobs documented, `YOUR_API_KEY`
+- `concurrency-proxy-v2.env.example` — all 15 knobs documented, `YOUR_API_KEY`
   placeholders, no real endpoints.
 - `concurrency-proxy-v2.service.example` — systemd unit sample.
 
@@ -64,6 +64,11 @@ rewritten; the header is neutral. **What was *not* changed: the code.** Equivale
 to the fleet-running version was proven by AST comparison (docstrings and version
 strings normalized, the remaining trees dump byte-identically), so this file is the
 same program the gateway-vs-direct numbers were measured through.
+
+> *Correction, 2026-09-24.* An earlier revision of this note said "all 13 knobs". The
+> file has carried **15** assignments since this very commit — count them, do not recall
+> them. The count became 16 in v0.2.8, when `SANITIZE_IMAGE_PLACEHOLDER` was added
+> ([RELEASE-NOTES-v0.2.8.md](RELEASE-NOTES-v0.2.8.md) §9).
 
 ## 3. PR-v3 re-measured at chunk 8192 (`data/prv3-v14-20260919/`)
 

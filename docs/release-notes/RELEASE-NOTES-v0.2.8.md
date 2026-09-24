@@ -271,9 +271,42 @@ PR 512K 单流 5,100+ t/s、16/16 ok、内存零退化。
 |---|---|
 | [`docs/engineering-assurance/luz028-matrix-report-pr-de-2026-09-24.md`](../engineering-assurance/luz028-matrix-report-pr-de-2026-09-24.md) | 0.2.8 完整矩阵窗（PR 40 格 + DE 20 格）的取证、复算与逐格断言记录 |
 | [`docs/engineering-assurance/de-sd1-retest-verdict-2026-09-24.md`](../engineering-assurance/de-sd1-retest-verdict-2026-09-24.md) | DE SD-1 重测判决（20/20 为正、零回退；`structured` 四格 INVESTIGATE 的登记理由） |
+| [`docs/engineering-assurance/interrupt-rca-image-placeholder-2026-09-24.md`](../engineering-assurance/interrupt-rca-image-placeholder-2026-09-24.md) | 服务中断 RCA：`:8001` 图像占位符 400 三连击与净化层修复（**属 §9 组件，不属本版镜像身份**；含执行事故诚实簿） |
+| [`docs/engineering-assurance/rc37-prod-crossaudit-20260924.md`](../engineering-assurance/rc37-prod-crossaudit-20260924.md) | `rc3.7.1` 生产侧只读交叉审核（🟢 生产合格；P2-A fail-open 的直接验证 + 3 条非阻塞观察；**属 §9 组件**） |
 
 > ⚠️ **相邻版本发布件的文件尺寸几乎不可分辨**（0.2.8 与 0.2.4 仅差 604,160 B／+0.0043%，
 > 0.2.7 同量级 <0.005%）⇒ **取用必核哈希，禁凭大小或文件名判版本。**
+
+## 9. 配套组件：并发代理（`gateway/`）
+
+`gateway/` **不在镜像内容身份链路内** —— 它是宿主侧的 `:8001` 服务，随仓库源码分发、
+不随 tar 分发。本节单列，避免与 §1 的镜像身份混为一谈。
+
+自 v0.2.3 那次开源化（`01d5e8f`）以来，仓库内的网关源码积压了**三代未发布变更**，
+本版一并补齐：
+
+| 变更 | 说明 |
+|---|---|
+| **G7 图像占位符净化（默认开）** | 客户端把历史图像序列化成字面文本时，引擎编码守卫对整个请求硬 `400`、会话即死（图像字节本就不在请求里，不可复原）。网关在 `/chat/completions` 与 `/responses` 上把该字面量改写成引擎接受的纯文本，并对**无法安全净化**的 body 保持 fail-open（原样透传 ⇒ 由上游给出真实 4xx，而不是网关 500）。回退开关 `SANITIZE_IMAGE_PLACEHOLDER=0`。 |
+| **非流式转发改为增量写** | `relay_plain` 由整包缓冲改为随读随写（`iter_any` + 单次写超时）。同机交替 A/B：非流式端到端劣化 **+156.4% → +4.7%**（门槛 ≤+15%），流式 −11.4%（优于直连）。 |
+| rc3.4–rc3.6.1 的修复与打磨 | 逐代哈希见 [`gateway/README.md`](../../gateway/README.md) 的血缘表。 |
+
+**口径标签（不得省）**：上述 `+156.4% → +4.7%` 是**非流式 wall 端到端**口径，与量具
+[`benchmarks/gw_ab_v2.py`](../../benchmarks/gw_ab_v2.py) 的 `wall` 臂同源（该臂就是为这件事
+存在的 —— **流式对照看不见整包缓冲**，因为流式客户端不是一个 read 等最后一字节）；它与流式
+吞吐不是同一个量，**不可互推**。
+
+- **等价性**：本仓库发布的 `gateway/concurrency_proxy_v2.py`（md5
+  `705b746725c78b7f5e12ee0f5f199350`，722 行）与机队现役文件（md5
+  `299332c1aaac5d38e7d0deb054b6869f`，754 行）**AST（剥 docstring）逐字节相同** ——
+  **连版本串与日志行都无需归一化**；差异仅限注释与模块 docstring。
+- 新增单测 `gateway/test_sanitize_image_placeholders.py`（15 项，含孤立代理项与深嵌套
+  两条 fail-open 回归）。
+- 配置面：`.env.example` 旋钮 **15 → 16**（新增 `SANITIZE_IMAGE_PLACEHOLDER`，默认 `1`）；
+  systemd 样例同步补该键。
+- ⚠️ **验收边界**：以上等价性与单测均为**发布件层面**的证明；生产侧上线合规由
+  [`rc37-prod-crossaudit-20260924.md`](../engineering-assurance/rc37-prod-crossaudit-20260924.md)
+  独立给出，两者不可互相替代。
 
 ---
 
