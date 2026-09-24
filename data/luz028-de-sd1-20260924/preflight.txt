@@ -1,0 +1,14 @@
+== preflight 2026-09-24T00:49:32Z ==
+-- engine identity (start.sh L1191 production formula) --
+template parsing error: template: :1:14: executing "" at <.RootFS.Layers>: map has no entry for key "RootFS"
+01ba4719c80b6fe9
+-- KV anchors (server_args) --
+max_running_requests=16
+max_total_num_tokens=9600000
+-- compute apps --
+pid, process_name, used_gpu_memory [MiB]
+100362, /opt/sglang/bin/python3, 170 MiB
+100490, sglang::scheduler_TP0_EP0, 96607 MiB
+-- harness md5 (must be 345de72b... / ff32163c...) --
+345de72bbc75b6fd232ffa8a4d642423  <deploy-root>/state/sdbench/de_matrix_v3.py
+ff32163c404112876c715be9aec091cf  <deploy-root>/state/sdbench/sd_protocol.py

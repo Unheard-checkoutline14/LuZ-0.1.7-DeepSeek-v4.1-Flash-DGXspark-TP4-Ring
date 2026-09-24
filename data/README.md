@@ -17,6 +17,22 @@ so a file is self-describing even if this page drifts.
 
 ---
 
+## Current authority — **0.2.8** (2026-09-23/24)
+
+Three directories carry the current published figures. Everything else on this page is
+lineage, kept so that a superseded number can still be traced to the file that produced it.
+
+| directory | what it holds | status |
+|---|---|---|
+| [`luz028-matrix-20260923/`](#luz028-matrix-20260923--pr-v3-纯-prefill-总吞吐0284040-格现行权威) | PR-v3 pure-prefill matrix on `dsv41-sglang-optimized:0.2.8`, **40/40 cells** at `chunk 8192`, per-stream raw records + `TABLE.md` + 8×5 view + run identity | ✅ complete, **authoritative** |
+| [`luz028-de-sd1-20260924/`](#luz028-de-sd1-20260924--de-sd-1-重测028现行权威) | DE on the SD-1 protocol, **20/20 cells**, 3 waves, per-stream records, with the fail-closed comparison script against the 0.2.4 baseline | ✅ complete, **authoritative** |
+| [`release-artifact-20260923/`](#release-artifact-20260923--offline-audit-of-the-028-archive) | offline audit of the published `LuZ-0.2.8-dsv41-tp4-dgxspark.tar` (md5, 9/9 blob digests, layer chain, identity reproduction) | ✅ complete |
+
+**Version discipline:** the 0.2.8 pack is only **604,160 bytes (+0.0043 %)** different from
+the 0.2.4 pack — size and filename **cannot** tell the two versions apart. Check the hashes.
+
+---
+
 ## `sd1-20260918/` — the SD-1 measurement set
 
 **Every published performance table, measured under one convention.** Produced by
@@ -30,7 +46,7 @@ directory on the head node carries each stage's start, exit code and elapsed tim
 | `grammar/` | guided-decoding A/B, 5 concurrencies × 2 arms × 3 waves, **with the per-stream records** | ✅ complete |
 | `fp4_256/` | fp4-indexer short-output arm, 256-token budget, `code` type, C=1/8/16 | ✅ complete (**one arm**: the indexer is on) |
 | `gw/` | `:8001` gateway vs direct `:8899`, three arms (prefill / decode / wall), `ROUNDS=2` | ✅ complete |
-| `pr/` | prompt-rate matrix (PR-v2), 6 input sizes × 5 concurrencies = 30 cells + 5-cell supplement — **withdrawn 2026-09-18**: no cache flush between cells, parallel-vs-queued indistinguishable, per-stream columns. Kept for audit, **numbers must not be quoted** (superseded twice over — current archive: `prv3-v18-20260919/`, same-window baseline `prv3-v14-20260919/`) | ⚠️ withdrawn |
+| `pr/` | prompt-rate matrix (PR-v2), 6 input sizes × 5 concurrencies = 30 cells + 5-cell supplement — **withdrawn 2026-09-18**: no cache flush between cells, parallel-vs-queued indistinguishable, per-stream columns. Kept for audit, **numbers must not be quoted** (superseded three times over — current archive: `luz028-matrix-20260923/`) | ⚠️ withdrawn |
 | `cache/` | what a repeated prompt is worth, at 2 k / 32 k / 131 k — prices the nonce defect | ⏳ not yet run |
 | `channel/` | chat vs native `/generate`, same unconstrained prompt, alternated within each wave | ⏳ not yet run |
 | `TABLES.generated.md` | every table of FINAL-METRICS §2–§8, rendered straight from this directory by `../benchmarks/render_report_tables.py`. Re-run that command to check the report byte for byte | regenerated as stages land |
@@ -146,7 +162,7 @@ the two supersession chains are documented there and in FINAL-METRICS §3.
 复现：`python3 ../benchmarks/render_pr_v3_tables.py prv3-v14-20260919`；
 并发判定：`python3 ../benchmarks/pr_v3_concurrency.py prv3-v14-20260919/raw 0.010 8192`。
 
-## `prv3-v18-20260919/` — PR-v3 纯 prefill 总吞吐（v18/0.2.4 基线，40/40 格，**现行权威基线**）
+## `prv3-v18-20260919/` — PR-v3 纯 prefill 总吞吐（v18/0.2.4 基线，40/40 格，**上一代对照**）
 
 `RUN_TAG=prv3-v18-20260919T234318`（2026-09-19 深夜），采集器
 `bench/prv3_collector.py`（**重建版**——原 v3 采集器会话内联失传，按 v14 数据模式
@@ -172,7 +188,9 @@ the two supersession chains are documented there and in FINAL-METRICS §3.
 **待复核（下一靴，≥2 靴纪律）**：512×C8/C16（−19%/−34%，单波方差嫌疑）；
 16384×C1（−23%，同档 C2–C16 全 +46~70）；2048×C8（−7.7%，噪声带内）。
 
-**基线登记**：v18 本次矩阵为**现行权威基线**，此后优化臂对同矩阵复测（≥2 靴、<5% 判噪声）。
+**基线登记**：v18 本次矩阵在 2026-09-20 ~ 2026-09-23 期间为权威基线，
+**2026-09-24 起降为上一代对照**（现行权威见本节顶部 `luz028-matrix-20260923/`）。
+此后优化臂对同矩阵复测（≥2 靴、<5% 判噪声）。
 代表值：512×C1 1214.2 / 4096×C16 4043.4 / 8192×C8 3704.1 / 65536×C8 3474.6 /
 131072×C16 2508.1 t/s。全表峰值 **4,299.6 t/s**（4096 × C2）。
 
@@ -197,6 +215,78 @@ identity **`4ebef21b6aedbd70`** — the value `start.sh`'s preflight asserts fle
 It is here for the same reason as the benchmark archives: a hash you cannot re-derive is a
 claim, not a proof. See that directory's README for the DAG, the blob budget and the table
 of all five serializations of the diffID list that have been published as "the identity".
+
+## `luz028-matrix-20260923/` — PR-v3 纯 prefill 总吞吐（0.2.8，40/40 格，**现行权威**）
+
+窗口 `LUZ028_MATRIX4K512K_20260923T150740Z`（2026-09-23T15:07:40Z → 16:56:29Z），
+跑在定板形态上：`IMAGE=dsv41-sglang-optimized:0.2.8`、`content_id=4cca364c46778423`、
+`env_md5=3f6a014d`、`chunk=8192`、`ctx=600000`、`share=4096`。
+**8 档输入（4096…524288）× 5 档并发 = 40 格全测**，`max_tokens=1`、逐请求 nonce、
+格间 `/flush_cache`，与 v14/v18/v19 三条硬约束一致。**零 VOID / 零 ABORT，50/50 格**
+（含同窗 DE 臂）。
+
+| 文件 | 内容 |
+|---|---|
+| `raw/<input>-c<C>-w0.json` | **40 个逐流原始记录**（`t0` / `t_first` / `t_last` / `t_end` / `prompt_sha16` / nonce） |
+| `summary.json` | 40 格逐格结果 + `_meta` |
+| `TABLE.md` | 40 格全序表 + 8×5 视图。**每格值都由 `raw/` 复算，并在写入前与服务器侧 per-cell `TABLE.md` 逐格断言相等**（`abs(s_tps − tps) < 0.01`） |
+| `IDENTITY.txt` | 运行身份（TAG / chunk / ctx / env_md5 / image content_id / endpoint），含 `banner_content_id` 与运行时 banner 的**双向**互证 |
+| `STATUS.tsv` | 机器可读的逐格状态（含掩码：部署根路径 → `<deploy-root>`） |
+| `de-w41-triage-superseded/` | 同窗的**旧 DE 臂**（`w41_de_triage.py`），已被 `luz028-de-sd1-20260924/` 取代，保留作对照 |
+
+**读数**：峰值 **5,823.11 t/s**（65536 × C2）；全表 **4,976.9–5,823.1 t/s**；
+`524288-c1 = 5,042.18`（硬门禁 `>4,500` ⇒ **+12.05%**）；`524288-c16 = 5,038.81`（**16/16 ok**）；
+同行 5 档并发极差 **≤4.22%**。
+
+> ⚠️ **harness 的标签不是测量**：采集器 `prv3_collector.py`
+> （md5 `bbda3e75661d25e58a7d43fb069d1674`）在每格 `TABLE.md` 头部**硬编码**了常量串
+> `(v18/0.2.4)`。那是构建期写入的字符串，**不是被测对象**——本窗口实测构建是 0.2.8，
+> 以 `IDENTITY.txt` 的 `content_id` 为证。同类陷阱另见本目录 §Conventions 末两条。
+
+复算：`python3 ../benchmarks/render_pr_v3_tables.py luz028-matrix-20260923`
+（表由归档机械产出，禁手抄；`raw/` → 表的每个数可逐格对齐）。
+
+## `luz028-de-sd1-20260924/` — DE SD-1 重测（0.2.8，**现行权威**）
+
+`RUN_TAG=LUZ028_DE_SD1_20260924`，2026-09-24T00:49:32Z → 01:43:54Z（`COMPLETE`）。
+**4 类型 × 5 并发 × 3 波 = 20/20 格有效**，`max_tokens=2048`，
+**每格 `grammar = None`**（无引导解码）——SD-1 口径与本仓其它表同一套。
+
+| 文件 | 内容 |
+|---|---|
+| `de_v3_matrix.json` | 20 格矩阵 + `_meta`（SD-1 协议原文、run tag、model、波数、阶梯） |
+| `de_<type>_c<conc>.json` × 20 | 逐格逐流原始记录（时间戳 / token / ttft） |
+| `compare_vs_024.py` | **fail-closed** 对照脚本：任一格缺文件、`grammar != None`、`ct != 2048` 或丢流即退出 1。判决报告里每个数都由它产出 |
+| `MANIFEST.md5` | 服务器侧 24 件 md5 清单 |
+| `preflight.txt` / `run.log` | 运行前身份与锚点记录、运行日志（各含部署根路径掩码） |
+| `COMPLETE` | 完成戳 |
+
+**判决**：对 0.2.4 基线 **20/20 格为正、零回退、零硬失败**；
+判据统计 **PASS 10 / WATCH 6 / INVESTIGATE 4**；类型极差 C1 1.72× → C16 2.37×（基线 1.80× → 2.39×）。
+**聚合总吞吐**（`Σ(2048×streams_ok) ÷ Σ 每波 wall`）峰值 **572.6 t/s**（code × C16），
+同式复算 0.2.4 归档得 543.9 ⇒ **+5.3%**。
+
+复现：`python3 data/luz028-de-sd1-20260924/compare_vs_024.py`
+
+## `release-artifact-20260923/` — offline audit of the 0.2.8 archive
+
+Not a benchmark archive: the recorded output of `scripts/verify_release_artifact.py` run
+against the published `LuZ-0.2.8-dsv41-tp4-dgxspark.tar` (14,002,663,936 B,
+md5 `a9d4cdf932203f173df7556aa511fee1`, sha256 `6c94745b…ec3a4`). It establishes, offline,
+that the archive is a self-consistent content-addressed store (9/9 blobs with
+`sha256(bytes) == filename`), that its reference graph closes (0 unreferenced blobs),
+that **every layer blob decompresses to exactly its config `diff_id`** (3/3 — the main
+layer at 32,637,625,344 B), and that it reproduces the content identity
+**`4cca364c46778423`** — the value `start.sh`'s preflight and boot banner assert fleet-wide.
+
+| file | what it holds |
+|---|---|
+| `audit-run-028.log` | the full console transcript (md5 timing 15.6 s, integrity pass 19.2 s, layer-chain pass) |
+| `release-audit-028.json` | the machine-readable result (blob table, identity, verdict) |
+| `blob-manifest.txt` | the 9 blobs with sizes and digests |
+| `layer-chain.log` | the decompress-and-compare pass (`raw=32,637,625,344` for the main layer) |
+
+A hash you cannot re-derive is a claim, not a proof — same reason as the benchmark archives.
 
 ---
 

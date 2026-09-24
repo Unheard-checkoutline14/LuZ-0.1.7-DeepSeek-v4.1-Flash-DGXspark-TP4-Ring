@@ -1,0 +1,1 @@
+[de-coding-c1-r5-2048] in=512 out=2048 ch=coding/struct ttft=0.388s ct=2048 frames=355 tok/frame=5.77 wall=22.8s itl_p50=63.1ms itl_p10=61.8ms itl_p90=64.6ms decode=91.5 t/s 门禁>90 ⇒ PASS

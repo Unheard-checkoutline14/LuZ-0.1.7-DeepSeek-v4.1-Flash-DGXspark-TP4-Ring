@@ -1,0 +1,1 @@
+[de-prose-c1-r5-2048] in=512 out=2048 ch=prose ttft=0.382s ct=2048 frames=624 tok/frame=3.28 wall=40.1s itl_p50=62.7ms itl_p10=60.3ms itl_p90=65.3ms decode=51.5 t/s 门禁>45 ⇒ PASS

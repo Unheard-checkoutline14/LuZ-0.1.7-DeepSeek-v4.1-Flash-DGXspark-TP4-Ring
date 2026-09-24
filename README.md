@@ -1,17 +1,18 @@
 # LuZ-0.1.7-DSV41F · DeepSeek-V4.1-Flash on 4× DGX Spark · TP4 switchless RoCE ring
-> ### 📥 Download the serving image (13.5 GiB)
+> ### 📥 Download the serving image (13.0 GiB)
 >
-> **[⬇ LuZ-0.2.4-dsv41-tp4-dgxspark.tar.zst — Baidu Netdisk](https://pan.baidu.com/s/1FUJUQ8ZYK5ZIsYZBK8aqkg?pwd=luzi)** · extract code: `luzi`
+> **[⬇ LuZ-0.2.8-dsv41-tp4-dgxspark.tar — Quark Drive](https://pan.quark.cn/s/ca93fedc6376)** · code `RHdj` · mirror **[Baidu Netdisk](https://pan.baidu.com/s/17IDk222FbLkLKTIqBJ6AzQ?pwd=luzi)** · code `luzi`
 >
-> MD5 `9daeb2ba314a1380988ed6f8afbe4657` · content identity `4ebef21b6aedbd70` · verify & install: **[Image download → §7](#7-image-download-release-artifact)**
+> MD5 `a9d4cdf932203f173df7556aa511fee1` · content identity `4cca364c46778423` · verify & install: **[Image download → §7](#7-image-download-release-artifact)**
 
 
-**Repo version: v0.2.5** (2026-09-20) — see the
-[release notes](docs/release-notes/RELEASE-NOTES-v0.2.5.md). Image is now `dsv41-sglang-optimized:0.2.5` (= `v19-40217prep`, image ID `ab5a109f…`,
-content identity `b4ca63d71bbe8557`): the **#40217 minimal native port**
-(dense-indexer candidate mask bound to `[tail≤128, lc]`) + engram stats v2.
-The 0.2.4 download below is the last *packaged* artifact; the 0.2.5 image is
-distributed as source + `start.sh` rebuild (identity re-derived at build time).
+**Repo version: v0.2.8** (2026-09-24) — see the
+[release notes](docs/release-notes/RELEASE-NOTES-v0.2.8.md). Image is now `dsv41-sglang-optimized:0.2.8`
+(content identity `4cca364c46778423`, 3 layers): the **OOM-era engineering close-out**
+(FIX-B/B' idle-release & snapshot hook, FIX-D width bucketing, `mm_ban`, R2 page-table grid,
+and the #40352 candidate-block protocol backport — default off). It is a **pure increment —
+nothing reduced vs 0.2.4** — re-measured end to end: PR full 40-cell matrix (peak
+**5,823.1 t/s**) and DE 20/20 cells positive. The image is **packaged for download again** (below).
 
 Production recipe for serving **deepseek-ai/DeepSeek-V4.1-Flash** — a ~550 B-parameter
 MoE (40 layers, 384 routed experts/layer, top-6 routing + 1 shared expert, MXFP4
@@ -34,15 +35,15 @@ benchmark archives. **No weights, no images, no NCCL binaries.**
 Every number below is tagged with the **build form it was measured on**. Two forms
 appear in this repo and they are *not* interchangeable — read the tag before quoting.
 
-Current production (what every number tagged *v19* below was measured on):
+Current production (what every number tagged *0.2.8* below was measured on):
 
 | | value |
 |---|---|
-| image | `dsv41-sglang-optimized:0.2.5` — content identity **`b4ca63d71bbe8557`** ([BUILD-IDENTITY.md](BUILD-IDENTITY.md)) |
-| change vs 0.2.4 | **#40217 minimal native port** (dense-indexer candidate mask was an unbounded `[chunk≤8192, lc]` bool ≈2 GiB at 245K prefix — now `[tail≤128, lc]`) + engram stats v2 (observability) |
+| image | `dsv41-sglang-optimized:0.2.8` — content identity **`4cca364c46778423`** (3 layers) ([BUILD-IDENTITY.md](BUILD-IDENTITY.md)) |
+| change vs 0.2.4 | **OOM-era engineering close-out** — FIX-B/B′ (idle release + scheduler snapshot hook), FIX-D (logits width bucketing), `mm_ban` (input-side id sampling mask), R2 page-table grid, #40352 candidate-block protocol (**default off**). Pure increment, nothing reduced |
 | context / KV pool / concurrency | 600,000 / 9,600,000 tokens / 16 |
 | chunk / EP / indexer | 8192 / EP2 / fp4 indexer on |
-| window gates before promotion | suite 18/18 · 4×245.7K needle 4/4 · governance pin → 0.2.5 |
+| promotion gates (0.2.8 window) | PR 512K single-stream **> 4,500 t/s hard gate ✓** · 512K × C16 **16/16 ok** · zero OOM, memory flat after the 8.4M-token corner |
 | full doc | [docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md) |
 
 Exact image IDs, SGLang commit, component versions and the release-artifact hashes:
@@ -63,39 +64,43 @@ smaller than that error bar is not a result.**
 
 ## 2. Form A — 600K production board
 
-Measured on the running production build (**v19 / 0.2.5** for the PR matrix; DE and the side arms are still v18-stack numbers — marked below). Full tables,
-per-cell aggregates and the raw archives:
+Measured on the running production build (**0.2.8** — both the PR matrix and the DE re-run
+were made on it). Full tables, per-cell aggregates and the raw archives:
 [docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md),
-[`data/prv3-v19-40217prep-20260920/`](data/prv3-v19-40217prep-20260920/) and [`data/sd1-20260918/`](data/sd1-20260918/).
+[`data/luz028-matrix-20260923/`](data/luz028-matrix-20260923/) and
+[`data/luz028-de-sd1-20260924/`](data/luz028-de-sd1-20260924/).
 
-### DE decode, per stream (4 prompt-label types, no grammar, force-filled budget) — measured on the v18 (0.2.4) stack
+### DE decode, per stream (4 prompt-label types, no grammar, force-filled budget) — measured on 0.2.8
 
 4 types × 5 concurrencies × 3 waves; cell value = `statistics.median` over every ok
 stream of every wave. Full 20-cell table with aggregates, total-throughput view and
 TTFT in [FINAL-METRICS §4](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md).
-**v19 (0.2.5) did not re-run DE** — #40217 touches the prefill path and engram v2 is
-observability-only, but that is untested here: quote these numbers as *v18-stack* until
-the DE re-run lands.
+Re-run against the 0.2.4-era baseline on the same SD-1 protocol: **20/20 cells positive,
+zero regressions** (drift band ≤5% PASS / 5–10% WATCH / >10% INVESTIGATE).
 
-| Type | C=1 | C=2 | C=4 | C=8 | C=16 | wave spread |
-|---|---:|---:|---:|---:|---:|---:|
-| code | **88.37** | 71.47 | 58.98 | 42.30 | 36.16 | ±3.5–±9.3% |
-| json | **81.55** | 65.16 | 52.25 | 35.64 | 30.70 | ±0.4–±2.1% |
-| structured | **74.40** | 51.36 | 38.81 | 28.24 | 20.23 | ±8.4–±43.5% |
-| prose | **49.09** | 38.34 | 28.08 | 18.37 | 15.11 | ±0.7–±8.3% |
+| Type | C=1 | C=2 | C=4 | C=8 | C=16 | wave spread | vs 0.2.4 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| code | **89.19** | 73.36 | 61.71 | 44.11 | 37.75 | ±0.3–±6.1% | +0.9…+4.6% — 5/5 PASS |
+| json | **85.90** | 69.28 | 54.84 | 36.70 | 31.44 | ±0.8–±2.7% | +2.4…+6.3% — PASS/WATCH |
+| structured | **76.99** | 60.41 | 51.94 | 32.79 | 27.95 | ±4.9–±38.4% | +3.5…+38.2% — INVESTIGATE (positive) |
+| prose | **51.92** | 40.06 | 29.88 | 19.51 | 15.94 | ±0.8–±3.0% | +4.5…+6.4% — PASS/WATCH |
 
 > **`structured` here is a prompt label, not a grammar constraint.** Ranking
-> `code > json > structured > prose` holds at all five concurrencies. `structured`
-> remains the only unstable type (wave spread ±8.4–±43.5% vs ≤±9.3% for the others);
-> the cause is *not identified*.
-> **DE aggregate total throughput (Σ output tokens ÷ Σ wave wall): peak 543.9 t/s at
-> code × C16** — 543.9 / 481.0 / 262.8 / 236.4 (code / json / structured / prose);
-> vs the v14 same-formula recompute 528.5, that is **+2.9%** (v18-stack lineage).
+> `code > json > structured > prose` holds at all five concurrencies, and the spread
+> widens with concurrency exactly as in the 0.2.4 baseline (C1 1.72× → C16 2.37×).
+> `structured` remains the only unstable type (wave spread ±4.9–±38.4% vs ≤±6.1% for the
+> others) and four of its cells drift far positive (+16…+38%): the direction is
+> favorable, **the cause is not identified** — registered as an open item, not
+> explained away.
+> **DE aggregate total throughput (Σ output tokens ÷ Σ wave wall): peak 572.6 t/s at
+> code × C16** — 572.6 / 488.3 / 363.0 / 247.6 (code / json / structured / prose);
+> same-formula recompute of the 0.2.4 baseline gives 543.9 / 481.0 / 262.8 / 236.4 ⇒
+> peak **+5.3%**.
 
-### PR — pure-prefill total throughput (PR-v3, all 40 cells) — [FINAL-METRICS §3](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)
+### PR — pure-prefill total throughput (all 40 cells, 4K–512K) — [FINAL-METRICS §3](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md)
 
-> Baseline lineage: PR-v2 withdrawn (2026-09-18, no cache flush / not total-throughput) → PR-v3 @ chunk 4096 superseded → **v14** (chunk 8192 re-run) → **v18** (0.2.4, MoE W4A8-MX) → **v19** (0.2.5, #40217 native port, **current**). Superseded archives are kept for audit: [`data/sd1-20260918/pr/`](data/sd1-20260918/pr/), [`data/prv3-20260918/`](data/prv3-20260918/), [`data/prv3-v14-20260919/`](data/prv3-v14-20260919/), [`data/prv3-v18-20260919/`](data/prv3-v18-20260919/).
-**Quote the v19 table below and nothing else.**
+> Baseline lineage: PR-v2 withdrawn (2026-09-18, no cache flush / not total-throughput) → PR-v3 @ chunk 4096 superseded → **v14** (chunk 8192 re-run) → **v18** (0.2.4, MoE W4A8-MX) → **v19** (0.2.5, #40217 native port) → **0.2.8** (OOM-era close-out, **current**; 4K–512K incl. 512K multi-stream). Superseded archives are kept for audit: [`data/sd1-20260918/pr/`](data/sd1-20260918/pr/), [`data/prv3-20260918/`](data/prv3-20260918/), [`data/prv3-v14-20260919/`](data/prv3-v14-20260919/), [`data/prv3-v18-20260919/`](data/prv3-v18-20260919/), [`data/prv3-v19-40217prep-20260920/`](data/prv3-v19-40217prep-20260920/).
+**Quote the 0.2.8 table below and nothing else.**
 
 PR-v3 measures what a load generator actually cares about: **total prompt tokens
 divided by the wall clock from releasing the first stream to the last stream
@@ -104,22 +109,28 @@ every request and a `POST /flush_cache` between cells.
 
 | Input tokens | C1 | C2 | C4 | C8 | C16 |
 |---:|---:|---:|---:|---:|---:|
-| 512 | 1,279.9 | 1,288.1 | 1,138.8 | 1,891.9 | **2,523.3** |
-| 2,048 | 3,199.9 | 3,095.8 | 3,792.7 | 3,838.1 | **3,876.5** |
-| 4,096 | 4,098.9 | 4,156.3 | 4,285.4 | **4,555.6** | 3,692.5 |
-| 8,192 | 4,794.2 | **4,803.2** | 4,715.7 | 3,370.6 | 4,185.8 |
-| 16,384 | 2,837.0 | 3,101.0 | **4,223.8** | 3,265.8 | 4,210.5 |
-| 32,768 | 3,338.0 | 3,433.8 | **3,645.8** | 2,900.8 | 2,888.0 |
-| 65,536 | 2,899.5 | **2,924.1** | 2,856.8 | 2,719.3 | 2,685.2 |
-| 131,072 | **2,634.9** | 2,559.8 | 2,523.8 | 2,467.5 | 2,517.2 |
-| 524,288 (single stream) | 2,257.2 | — | — | — | — |
+| 4,096 | 4,464.8 | 4,480.5 | 4,530.9 | 4,875.8 | **5,033.1** |
+| 8,192 | 5,360.1 | 5,337.1 | 5,165.3 | **5,383.3** | 5,326.1 |
+| 16,384 | 5,498.8 | 5,638.4 | **5,639.3** | 5,618.9 | 5,494.8 |
+| 32,768 | 5,772.0 | 5,781.2 | **5,810.3** | 5,691.9 | 5,689.8 |
+| 65,536 | 5,792.5 | **5,823.1** | 5,777.6 | 5,701.7 | 5,724.3 |
+| 131,072 | **5,791.1** | 5,671.6 | 5,620.8 | 5,600.9 | 5,675.0 |
+| 262,144 | **5,585.7** | 5,429.9 | 5,439.9 | 5,496.1 | 5,520.1 |
+| 524,288 | 5,042.2 | 4,976.9 | 5,009.1 | **5,066.6** | 5,038.8 |
 
-**Reading the board** (single wave per cell ⇒ no error bar; same-window deltas only): peak **4,803.2 t/s at 8192 × C2** (+11.7% over the v18 peak 4,299.6; median cell **+8.1%**, 31 up / 9 down). The whole 8192 row jumps **+36…+55%** at C1–C4 — the direction #40217's bounded mask predicts (the dense-indexer transient bites hardest when the 8192-token step budget is full). Long inputs (32K–131K) tighten into **2,467.5–3,645.8 t/s**. Honest regressions (single-wave, queued for ≥2-boot re-measurement): 512×C4 −36.6%, 65536×C8 −21.7%, 16384×C2 −15.5%, plus four smaller dips. Concurrency verdict is unchanged in shape from v18: admission law exact in 27/40 cells, real parallel steps in 11/40 (512 up to width 10, 2048 up to 5, 4096 width 2-3; ≥8192 multi-stream cells serialize — engine admission policy, not a client defect; details in [data/prv3-v19-40217prep-20260920/CONCURRENCY.md](data/prv3-v19-40217prep-20260920/CONCURRENCY.md)).
+**Reading the board** (single wave per cell ⇒ no error bar; same-window deltas only):
+peak **5,823.1 t/s at 65536 × C2**; the whole board sits in **4,976.9–5,823.1 t/s**.
+Concurrency does not drive throughput — within any input row the extremes span
+**≤4.22%**. Long documents favour **many short prompts over few long ones** (the 65,536
+row tops the board; the 524,288 row settles at 4,976.9–5,066.6). **512K single-stream =
+5,042.2 t/s**, clearing the hard gate (`> 4,500`, **+12.05%**); **the 512K row was
+measured at all five concurrencies this time** (C16 5,038.8, 16/16 ok) — earlier boards
+promised single-stream only. The 4,096 row is `NON_ALIGNED` (a half-chunk size) and is
+not compared against whole-chunk rows. Every per-cell value was recomputed from the
+per-stream raw records and asserted equal to the server-side per-cell tables before
+publication (see [the archive README](data/luz028-matrix-20260923/README.md)).
 
-> The 524,288 row is single-stream by design: longer multi-stream cells are not
-> promised — the old C16 attempt hit 5,955 s TTFT.
-
-### Gateway and short-output arms
+### Gateway and short-output arms *(v18-stack numbers, not re-run on 0.2.8)*
 
 | metric | value | note |
 |---|---|---|
@@ -129,18 +140,17 @@ every request and a `POST /flush_cache` between cells.
 ### Headline figures
 
 **Total throughput — the two numbers to quote: PR pure-prefill total throughput peak
-4,803.2 t/s (8192 × C2, chunk 8192, **v19/0.2.5**) · DE aggregate decode peak 543.9 t/s
-(code, C16, v18/0.2.4 stack — v19 DE re-run pending).**
+5,823.1 t/s (65536 × C2, **0.2.8**) · DE aggregate decode peak 572.6 t/s
+(code, C16, **0.2.8**, Σ output tokens ÷ Σ wave wall).**
 
 | metric | value |
 |---|---|
-| **PR total throughput peak (pure prefill, PR-v3 @ chunk 8192, v19)** | **4,803.2 t/s** (8192 × C2) · runner-up **4,794.2 t/s** (8192 × C1) · best small-prompt cell **2,523.3 t/s** (512 × C16) · 8192 row C1–C4 **+36…+55%** vs v18 |
-| PR vs v18 (same harness, same chunk, same window) | peak **+11.7 %** · median cell **+8.1 %** (31 up / 9 down) · long tier (≥16K) median +8.1 % · single-wave regressions up to −36.6% queued for re-measurement |
-| PR concurrency verdict (v19) | same shape as v18: admission law exact in 27/40 cells, none above; real parallel steps in 11/40 (512 width ≤10 · 2048 ≤5 · 4096 2–3); ≥8192 multi-stream cells serialize (engine admission policy) |
-| **DE aggregate decode peak (total throughput, v18 stack)** | **543.9 t/s** (code, C16) · per-stream C1 peak 88.37 t/s (code) — v19 re-run pending |
-| GSM8K, 200 questions (v18 stack) | **0.9600** (192/200) · temp 0.6, 8-shot · indexer off |
-| engine cold start | **345.7 s ≈ 5.8 min** (`tokenizer_e2e`, v18) |
-| window gates (v19 promotion) | suite 18/18 · 4×245.7K needle 4/4 · governance pin → 0.2.5 |
+| **PR total throughput peak (pure prefill, chunk 8192, 0.2.8)** | **5,823.1 t/s** (65536 × C2) · runner-up **5,791.1 t/s** (131072 × C1) · 512K single-stream **5,042.2 t/s** (hard gate `>4,500` ⇒ **+12.05%**) · within-row spread at any input ≤4.22% |
+| **DE aggregate decode peak (total throughput, 0.2.8)** | **572.6 t/s** (code, C16) — same-formula 0.2.4 recompute 543.9 ⇒ **+5.3%** · per-stream C1 peak **89.19 t/s** (code) |
+| DE vs 0.2.4 (SD-1, same protocol) | **20/20 cells positive, zero regressions** · code 5/5 PASS (+0.9…+4.6%) · 4 × structured cells +16…+38% flagged INVESTIGATE (positive; cause not identified) |
+| GSM8K, 200 questions | **0.9600** (192/200) · temp 0.6, 8-shot · indexer off *(v18-stack number, not re-run)* |
+| engine cold start | **345.7 s ≈ 5.8 min** (`tokenizer_e2e`) *(v18-stack number)* |
+| promotion gates (0.2.8 window) | PR 512K single-stream >4,500 ✓ · 512K×C16 16/16 ok · zero OOM · memory flat after the 8.4M-token corner |
 
 Guided decoding, the chat-vs-native channel comparison and what a repeated prompt is
 worth are measured as their own arms in
@@ -176,7 +186,7 @@ are in [benchmarks/README.md §3.1](benchmarks/README.md).
 | `DSV41_CACHE_GIB=1` / 16-way | Engram row cache: hit rate 0 → 99.1 %, c12 +6 %, prefill 100 K +10.5 % |
 | `DSV41_SHARED_PAD_K=1` | upstream PR #17: keeps the shared expert's K=576 shape eligible for b12x (bit-identical) |
 | static verify mode | upstream compact/ragged mode trips an engram target-verify assertion on V4.1 (sgl-project/sglang#39173) |
-| `CHUNKED_PREFILL_SIZE=4096` (production) | what makes a 524288-token prompt fit at all — and the reason long-prompt prefill is serialized one request at a time. **The 2026-09-19 PR benchmark re-run was measured at 8192** (a benchmark form, not a production change — the launcher now validates `{2048, 4096, 6144, 8192}`); see [benchmarks/README.md §3.2](benchmarks/README.md) and the note in [FINAL-METRICS §1.4](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md) |
+| `CHUNKED_PREFILL_SIZE=8192` (production since 0.2.8; was 4096) | what makes a 524288-token prompt fit at all — and the reason long-prompt prefill is serialized one request at a time. 8192 was first measured as a *benchmark-only* form on 2026-09-19 and promoted to the production `.env.tp4` (`.env.tp4:156`) in the 0.2.8 window; **every 0.2.8 cell** (§2) is at 8192, so a long-input prompt must be a multiple of 8192 to be comparable. See [benchmarks/README.md §3.2](benchmarks/README.md) and [FINAL-METRICS §1.4](docs/03-final-metrics/FINAL-METRICS-600K-2026-09-18.md) |
 
 **fp4 indexer (`--enable-deepseek-v4-fp4-indexer`) is ON** in Form A. It is an
 env-level switch and Form B runs with it off; the two forms are different
@@ -192,7 +202,8 @@ side effect; c8/c12 rise far more.
 
 ## 4. Experimental operator optimization (what we changed, and the risks)
 
-The production build carries **three experimental layers** on top of upstream SGLang.
+The production build carries **three experimental layers** on top of upstream SGLang,
+plus a set of **env-gated scheduler/allocator fixes added in 0.2.8** (last subsection below).
 All are env-gated or file-level grafts; upstream behaviour is one flag away. They are
 the main source of this build's measured gains (c12 aggregate +47 %, decode peak +12 %,
 prefill 100 K +4–10 %) and the main source of its upgrade risk. Read this before
@@ -260,6 +271,52 @@ Headline operators, all fusing what upstream runs as separate kernels:
 - `prefill_empty_cache.py` — returns each long-prefill chunk's transient indexer
   memory to the allocator between chunks (600 K-context headroom)
 
+### 0.2.8 additions — OOM-era close-out (scheduler / allocator, not kernels)
+
+The **2026-09-21 four-node OOM chain** was root-caused to transient **prefill-chunk
+memory strangulation** inside the CUDA caching allocator (~0.5–1 GB per chunk,
+invisible to the scheduler's own accounting), compounded by health-check kill loops
+and a Linger auto-restart. 0.2.8 closes that out. Production wires these into
+`.env.tp4` `EXTRA_DOCKER_ENV`; the **image defaults** are shown for reference, because
+"the code defaults to off" and "production runs it" are both true here:
+
+| item | gate | image default | production (`.env.tp4`, md5 `3f6a014d`) |
+|---|---|---|---|
+| FIX-B idle release | `DSV41_IDLE_RELEASE` | `0` off | **`1` on** |
+| FIX-B′ SIGUSR1 memory-snapshot hook | `DSV41_SCHED_SNAPSHOT` | `0` off | **`1` on** (diagnostic; whole chain fail-open) |
+| FIX-D logits width bucketing | hard-coded, no env gate | follows the fp4-indexer branch | **not on the path** (that flag is unset) |
+| `mm_ban` input-side id mask | `DSV41_BAN_MM_PLACEHOLDERS` / `DSV41_BAN_PROMPT_CONTROL_TOKENS` | `1` on | **on** (default) |
+| R2 page-table width grid | `SGLANG_DSV4_PAGETABLE_PAGES_GRID` | `1024` → grid **on** | **`1` → grid off** (deliberate) |
+| #40352 candidate-block protocol | `DSV41_IDX_PROTOCOL` | `false` | **`1`** — the 256K/512K single-stream survival switch |
+
+- **FIX-B** releases allocator segments only inside a fully-idle window (no running, no
+  queued — the same window class as `flush_cache`'s internal `empty_cache`). Its dose
+  limit is stated honestly: 16 K clean, 32 K hits the wall on three nodes — it rescues
+  *request boundaries*, not *in-flight* peaks.
+  (v1 of it could **never fire**: it read a `memory_stats()` key that this torch build
+  suffixes with `.current`/`.peak`, so the lookup returned 0 and the function returned
+  silently. v2 uses the documented wrappers.)
+- **FIX-D** collapses the per-chunk logits allocation width from 9185 distinct sizes to
+  **2**, so the allocator reuses by class. ⚠️ **Operational ban:** if you ever enable
+  `--enable-deepseek-v4-fp4-indexer`, fix the bucketing **first** — the current step is
+  a 1024× over-allocation at the 2 K width.
+- **`mm_ban`** masks 438 input-side-only token ids at the sampling layer, on **both** the
+  target and the draft side. `129271..129278` are deliberately **not** masked (they are
+  valid vision-grounding outputs), so the set is an explicit enumeration checked against
+  the tokenizer — **it cannot be derived by id range or by the `special` flag.** Boundary:
+  it filters *sampling*, not echoes of the request body.
+- **R2 grid**: at `1024`, a page-table width above 1024 rounds up to a multiple of 1024
+  (closing the "width grows with context ⇒ every chunk needs a new block" hole), while
+  below the grid line it keeps legacy exact sizing. Production sets `1` (grid off) — a
+  carried-over decision from the 2026-09-22 ladder window, not an oversight.
+- **#40352** (semantics-level backport, not a whole-chain port) publishes prompt-side
+  candidates as an **int32 block-id table** instead of a per-token fp32 score matrix +
+  bool mask (~17 GB + 4.3 GB per layer at 600 K). Release payload **73.2× smaller**
+  (600 K corner: `2048 × 4 B` vs `600000 B`); candidates cover **2.73 %** of tokens, so
+  **97.27 %** of the old mask was pure waste. With the flag off there is zero coupling
+  (the new module is imported lazily). CPU equivalence gate: **42/42 PASS** (7 scenarios
+  × 4 checks, element-wise equal including the production 600 K / 8192 shape).
+
 ### ⚠️ Risks you accept by using this build
 
 1. **Bit-exactness is per-path, not global.** c1/c2 use closed-form softmax and FMA
@@ -308,9 +365,13 @@ answered questions about *previous* forms and are not comparable with §2
  comparison moved to [docs/4DGX-dsv41-基准测试-横向对比-20260912.md](docs/4DGX-dsv41-基准测试-横向对比-20260912.md).
  Its headline decode (100.3 tok/s), prefill (3102/3443/3253 t/s) and aggregate c1–c12
  figures belong to that form only.
+- **v19 (0.2.5, #40217 native port) — 2026-09-20 to 2026-09-23**: the board that held
+  this page until the 0.2.8 matrix replaced it. Archive [`data/prv3-v19-40217prep-20260920/`](data/prv3-v19-40217prep-20260920/);
+  it is the last board measured on the v18-era stack and is **not cell-for-cell
+  comparable** with §2 (different engine build and operator set).
 - **PR-v2 / PR-v3@4096 / v14 / v18 PR boards**: kept as audit archives under
- [`data/`](data/) (`sd1-20260918/pr/`, `prv3-20260918/`, `prv3-v14-20260919/`,
- `prv3-v18-20260919/`) — quote §2 of this README instead.
+  [`data/`](data/) (`sd1-20260918/pr/`, `prv3-20260918/`, `prv3-v14-20260919/`,
+  `prv3-v18-20260919/`) — quote §2 of this README instead.
 
 ## 6. Repo contents
 
@@ -338,61 +399,85 @@ answered questions about *previous* forms and are not comparable with §2
   [§3.2 on the engine's prefill admission law](benchmarks/README.md)
 - `bench/` — gate suite (needle / corruption / termination / code-gate), vision gate,
   prose, GSM8K, third-party-shaped sweep, MoE numeric/capacity ladders
-- `data/` — **raw benchmark archives**: current authority `data/prv3-v19-40217prep-20260920/` (40/40 PR cells, per-stream raw records), then the lineage `prv3-v18-20260919/`, `prv3-v14-20260919/`, `prv3-20260918/`, the 2026-09-18 SD-1 arms under `sd1-20260918/` (DE matrix with
-  per-stream records, the grammar A/B, the fp4 short-output arm, gateway-vs-direct,
-  and the two GSM8K runs) plus **`data/prv3-v14-20260919/`** — the current PR-v3
-  matrix, 40/40 cells at `chunk 8192` with per-stream raw records — and the two
-  superseded PR archives kept for audit (`data/prv3-20260918/`, `data/sd1-20260918/pr/`),
-  and the recorded offline audit of the release archive
-  (`data/release-artifact-20260918/`). Every published figure is re-derivable from these
-  files; [`data/README.md`](data/README.md) says how, and names the one column that is
-  not
+- `data/` — **raw benchmark archives**. Current authority:
+  [`data/luz028-matrix-20260923/`](data/luz028-matrix-20260923/) (PR, 40/40 cells at
+  `chunk 8192`, per-stream raw records + `TABLE.md` + run identity) and
+  [`data/luz028-de-sd1-20260924/`](data/luz028-de-sd1-20260924/) (DE, 20/20 cells on the
+  SD-1 protocol, per-stream records, 3 waves, re-run against the 0.2.4 baseline). Then
+  the lineage `prv3-v19-40217prep-20260920/`, `prv3-v18-20260919/`,
+  `prv3-v14-20260919/`, `prv3-20260918/`; the 2026-09-18 SD-1 arms under
+  `sd1-20260918/` (DE matrix with per-stream records, the grammar A/B, the fp4
+  short-output arm, gateway-vs-direct, and the two GSM8K runs); and the two superseded
+  PR archives kept for audit (`data/prv3-20260918/`, `data/sd1-20260918/pr/`). The
+  offline audits of the published archives are recorded under
+  `data/release-artifact-20260918/` (v0.2.4 pack) and
+  [`data/release-artifact-20260923/`](data/release-artifact-20260923/) (0.2.8 tar: md5,
+  9/9 blob digests, layer-chain decompression check, identity reproduction). Every
+  published figure is re-derivable from these files; [`data/README.md`](data/README.md)
+  says how, and names the one column that is not
 - `.env.tp4.example` — the configuration this repo runs (sanitized template; the live
   `.env.tp4` is gitignored)
 - `BUILD-IDENTITY.md` — image IDs, SGLang commit, component versions, artifact hashes,
   and the exact identity formula to check an image against
 - `docs/` — deployment plan, upstream ISSUE/PR survey, benchmark comparison, the
-  final metrics board, the [release notes](docs/release-notes/), and the
-  [operator inventory & rollback ledger](docs/operators/) (§4's evidence base)
+  final metrics board, the [release notes](docs/release-notes/),
+  the [operator inventory & rollback ledger](docs/operators/) (§4's evidence base),
+  and [engineering-assurance reports](docs/engineering-assurance/) (the 0.2.8 matrix
+  window + the DE SD-1 verdict, in their sanitized published form)
 
 ---
 
 ## 7. Image download (release artifact)
 
-The serving image (13.5 GiB) is distributed via cloud drive:
+The serving image (**13.0 GiB**) is distributed via cloud drive (two mirrors):
 
-- **Baidu Netdisk**: https://pan.baidu.com/s/1FUJUQ8ZYK5ZIsYZBK8aqkg?pwd=luzi (extract code: `luzi`)
-- **File**: `LuZ-0.2.4-dsv41-tp4-dgxspark.tar.zst`
-- **Size**: 14,462,447,532 bytes (13.5 GiB)
-- **MD5**: `9daeb2ba314a1380988ed6f8afbe4657`
-- **SHA256**: `f98af3b5a40ad83150b3f0e0fd3b373fad50e34cbfbc4b7b8786324b36818a3d`
-- **Content identity**: `4ebef21b6aedbd70` — the same value all four production nodes report, and **re-derivable offline from the archive itself** (same image as the v0.2.2-era distribution; the v0.2.4 file is a re-pack under the new name — offline re-run of `verify_release_artifact.py` reproduces this identity on the new file)
+- **Quark Drive**: https://pan.quark.cn/s/ca93fedc6376 (extract code: `RHdj`)
+- **Baidu Netdisk**: https://pan.baidu.com/s/17IDk222FbLkLKTIqBJ6AzQ?pwd=luzi (extract code: `luzi`)
+- **File**: `LuZ-0.2.8-dsv41-tp4-dgxspark.tar` — a **plain (uncompressed) OCI tar**, so
+  `docker load -i` works without `zstd`
+- **Size**: 14,002,663,936 bytes (13.0 GiB / 13.04 GiB)
+- **MD5**: `a9d4cdf932203f173df7556aa511fee1`
+- **SHA256**: `6c94745b261eb01a6bea9864af443d0e89583562c624926b30f9dfbc771ec3a4`
+- **Content identity**: **`4cca364c46778423`** (3 layers) — the value all four production
+  nodes report, **re-derivable offline from the archive itself**. The tar is a
+  14-member OCI layout (9 blobs + `index.json` + `manifest.json` + `oci-layout` + 2
+  directory entries); loading it restores `dsv41-sglang-optimized:0.2.8`.
+
+> **Check the hashes, not the filename or the size.** The 0.2.8 pack differs from the
+> 0.2.4 pack by only 604,160 bytes (+0.0043%) — that is *not* enough to tell the two
+> versions apart by eye. The recorded offline audit of this exact file (md5, 9/9 blob
+> digests, layer chain, identity reproduction) is checked in under
+> [`data/release-artifact-20260923/`](data/release-artifact-20260923/).
 
 Verify before you load anything (no cluster, no docker daemon, no GPU needed):
 
 ```bash
-pip install zstandard
-python scripts/verify_release_artifact.py LuZ-0.2.4-dsv41-tp4-dgxspark.tar.zst --md5
-# md5 MATCH · 123/123 blob sha256 verified · 0 unreferenced blobs
-# content identity 4ebef21b6aedbd70 · RESULT: PASS  (exit 0)
+python scripts/verify_release_artifact.py LuZ-0.2.8-dsv41-tp4-dgxspark.tar --md5 \
+  --expect-identity 4cca364c46778423 --layer-chain
+# md5 MATCH · 9/9 blob sha256 verified · 0 unreferenced blobs
+# content identity 4cca364c46778423 · layer chain 3/3 decompress to their config diff_id
+# RESULT: PASS  (exit 0)
 ```
 
 Then load on all four nodes (all of them need the image) and re-check identity locally:
 
 ```bash
-docker load -i LuZ-0.2.4-dsv41-tp4-dgxspark.tar.zst   # requires zstd; restores dsv41-sglang-optimized:v7
-docker image inspect -f '{{join .RootFS.Layers " "}}' dsv41-sglang-optimized:v7 \
-  | sha256sum | cut -c1-16      # expect: 4ebef21b6aedbd70
+docker load -i LuZ-0.2.8-dsv41-tp4-dgxspark.tar   # restores dsv41-sglang-optimized:0.2.8
+docker image inspect -f '{{join .RootFS.Layers " "}}' dsv41-sglang-optimized:0.2.8 \
+  | sha256sum | cut -c1-16      # expect: 4cca364c46778423
 ```
 
-That one-liner is the formula `start.sh`'s own preflight uses, so a passing local check
-means the fleet-level check will pass too. **Do not** verify by layer count or by
-`docker image inspect --format '{{.Id}}'`: the reported image ID differs between the head
-(`03587ce9…`) and the workers (`9e1036bc…`) because those are *two different objects in
-the same archive* — the OCI index blob and the image-config blob respectively — while the
-123-layer content is identical. Full reasoning, all five serializations of the same layer
-list that have been published as "the identity" (they hash to five different values), and
-the empty-input trap (`01ba4719c80b6fe9` = a **missing** image, not an identity) are in
+That one-liner is the formula `start.sh`'s own preflight and boot banner use, so a passing
+local check means the fleet-level check will pass too. **Do not** verify by layer count, by
+`docker images SIZE`, or by `docker image inspect --format '{{.Id}}'` / `{{.Config}}`:
+those report objects that legitimately differ between the head and the workers (or between
+`docker images` versions) while the *content* is identical, so they manufacture false
+"the four nodes disagree" alarms. What binds an archive to a running fleet is the
+**layer list**, and the exact serialization matters: the same three layer digests serialize
+**seven** different ways and hash to **seven** different values — only the
+space-joined-with-trailing-newline form (`{{join .RootFS.Layers " "}}` piped into
+`sha256sum`, i.e. `4cca364c46778423`) is authoritative. All seven, plus the empty-input
+trap (`01ba4719c80b6fe9` = a **missing** image, not an identity), are in
 [BUILD-IDENTITY.md](BUILD-IDENTITY.md).
 
 ---
@@ -410,7 +495,11 @@ and the list of hits that are deliberately *left alone* (generic address scheme,
 author identifiers, stock HCA names), are in
 [benchmarks/README.md §4](benchmarks/README.md).
 `scripts/check_redaction.py` re-checks all of it and exits non-zero on any unclassified
-hit in a blocker class.
+hit in a blocker class. **The checker is itself checked**: injecting a known-bad path and
+a known node hostname into the tree makes it fail (`exit 1`), removing them makes it pass
+(`exit 0`) — a scanner that has never been shown to fail proves nothing. The 0.2.8
+archives (`data/luz028-matrix-20260923/`, `data/luz028-de-sd1-20260924/`,
+`data/release-artifact-20260923/`) were scanned with the same fail-closed run.
 
 The repository's default branch is **`main`**, and **the adaptation lives on `main`** —
 this is a standalone engineering snapshot, not a branch of the upstream project.

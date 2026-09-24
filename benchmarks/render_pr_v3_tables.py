@@ -26,8 +26,50 @@ import sys
 CONCS = [1, 2, 4, 8, 16]
 TOL = 0.010
 
-MARKER_FULL = "<!-- generated from summary.json + raw/*-c*-w0.json -->"
-MARKER_MATRIX = "<!-- generated from summary.json (7x5) -->"
+MARKER_FULL = "<!-- generated from summary.json + raw/*-c*-w0.json%s -->"
+MARKER_MATRIX = "<!-- generated from summary.json (7x5%s) -->"
+
+# Both summary schemas this repo has shipped. `prv3-*` writes the verbose keys plus
+# `_meta.sizes`; the 0.2.8 collector writes `{inp, conc, n, tok, wall, tps, ttft_first,
+# ttft_last}` and no `_meta`. Rendering stays mechanical either way -- but the mapping is
+# explicit and a missing output field raises, so a schema this script has never seen
+# fails loudly instead of rendering blank cells that look like real zeros.
+FIELD_ALIASES = {
+    "inp": "input_tokens",
+    "conc": "concurrency",
+    "n": "streams_ok",
+    "tok": "total_prompt_tokens",
+    "wall": "wall_s",
+    "tps": "total_throughput_tps",
+    "ttft_first": "ttft_first_s",
+    "ttft_last": "ttft_last_s",
+}
+REQUIRED = ["input_tokens", "concurrency", "streams_ok", "total_prompt_tokens", "wall_s",
+            "total_throughput_tps", "ttft_first_s", "ttft_last_s"]
+
+
+def normalize(summ, root=""):
+    """Map either shipped summary schema onto the canonical field names."""
+    cells = []
+    for c in summ["cells"]:
+        cell = dict(c)
+        for short, full in FIELD_ALIASES.items():
+            if short in cell and full not in cell:
+                cell[full] = cell.pop(short)
+        cells.append(cell)
+    missing = sorted({k for c in cells for k in REQUIRED if k not in c})
+    if missing:
+        raise SystemExit("summary.json: cell(s) missing required field(s): %s" % missing)
+    meta = dict(summ.get("_meta") or {})
+    if "sizes" not in meta:
+        meta["sizes"] = sorted({c["input_tokens"] for c in cells})
+    # The marker must identify *which* archive produced the table: three archives in this
+    # repo render the same shape, so a bare `(7x5)` marker made two different tables
+    # answer to the same key and a checker comparing report-vs-archive could pass or fail
+    # against the wrong table. Carry the run tag (falling back to the directory name).
+    meta["run_tag"] = (summ.get("run_tag") or meta.get("run_tag")
+                       or os.path.basename(os.path.normpath(root)))
+    return {"cells": cells, "_meta": meta}
 
 
 def clusters(vs, tol=TOL):
@@ -43,7 +85,7 @@ def clusters(vs, tol=TOL):
 
 def main():
     root = sys.argv[1] if len(sys.argv) > 1 else "data/prv3-20260918"
-    summ = json.load(open(os.path.join(root, "summary.json"), encoding="utf-8"))
+    summ = normalize(json.load(open(os.path.join(root, "summary.json"), encoding="utf-8")), root)
     cells = {(c["input_tokens"], c["concurrency"]): c for c in summ["cells"]}
     sizes = summ["_meta"]["sizes"]
 
@@ -56,7 +98,9 @@ def main():
         cl = clusters([r["t_first"] for r in ok])
         width[(inp, conc)] = (max(len(c) for c in cl), len(cl))
 
-    print(MARKER_FULL)
+    tag = summ["_meta"].get("run_tag")
+    suffix = (", %s" % tag) if tag else ""
+    print(MARKER_FULL % suffix)
     print()
     print("| Input tokens | C | Streams OK | Total prompt tokens | Wall s | **Total t/s** "
           "| TTFT first s | TTFT last s | Observed batch width | Prefill batches | Verdict |")
@@ -76,7 +120,7 @@ def main():
                   f"| {x['ttft_first_s']:.3f} | {x['ttft_last_s']:.3f} | {w} | {nc} | {verdict} |")
 
     print()
-    print(MARKER_MATRIX)
+    print(MARKER_MATRIX % suffix)
     print()
     print("| Input tokens | C1 | C2 | C4 | C8 | C16 | row median | best |")
     print("|---:|---:|---:|---:|---:|---:|---:|---|")

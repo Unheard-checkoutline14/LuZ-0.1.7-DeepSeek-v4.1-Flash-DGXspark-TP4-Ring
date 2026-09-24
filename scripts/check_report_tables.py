@@ -86,10 +86,23 @@ def main():
     if os.path.exists(declared):
         try:
             with open(declared, encoding="utf-8") as fh:
-                meta = json.load(fh).get("_meta", {})
+                summ = json.load(fh)
         except (ValueError, OSError):
-            meta = {}
-        if meta.get("protocol_id") == "PR-V3":
+            summ = {}
+        if not isinstance(summ, dict):
+            summ = {}
+        meta = summ.get("_meta") or {}
+        protocol = meta.get("protocol_id") or summ.get("protocol") or ""
+        # Three PR-v3 summary schemas ship in this repo. `prv3-20260918/` and
+        # `prv3-v14-20260919/` declare `_meta.protocol_id == "PR-V3"`; `prv3-v18-*`,
+        # `prv3-v19-*` and `luz028-matrix-*` carry **no** `_meta` (v18: only `cells`;
+        # luz028: a flat `protocol` string + `cells`). Keying on the declared id alone
+        # silently fell back to the SD-1 renderer for those and printed
+        # "tables in archive : 0" -- a green check that verified nothing. So also accept
+        # the structural signature (a flat `cells` list) and the `PR-v3` protocol string.
+        is_pr_v3 = (bool(summ.get("cells"))
+                    or str(protocol).upper().replace("_", "-").startswith("PR-V3"))
+        if is_pr_v3:
             renderer = os.path.join(os.path.dirname(renderer),
                                     "render_pr_v3_tables.py")
     if not os.path.exists(renderer):

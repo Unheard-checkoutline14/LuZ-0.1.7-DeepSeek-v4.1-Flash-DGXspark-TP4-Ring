@@ -1,0 +1,14 @@
+     14002048230  blobs/sha256/2fb11ed24de28bf43fd41b76406553983d5b2a574a5aefd32cdcc652c6aba240
+          593097  blobs/sha256/68a2b7946f478f57fddd329e7df944ad855db405579aa4cadfdaae3b428229cd
+            5807  blobs/sha256/93e7b0e3a8966bbc3f668b218ac3db663cdd48eef1c122215bb0432b997a27ab
+            1024  blobs/sha256/90dc69997072d92afb4685f5aebe9c89d2e4ea701dc051ed4cfa20e6c0a3d639
+             863  blobs/sha256/1e2779d8fa5444af41189433926965c9e7d96b48a2087b87c3f1524861772429
+             855  blobs/sha256/f862f8160f65f67b3ab921bed5b354a1c7f21b37adea8d0fcc93e3e5aa48b236
+             566  blobs/sha256/02036f2f662e24e5b4160276258c7b44250f850e3ba6483a14fbd2b37f05367a
+             387  manifest.json
+             373  index.json
+             167  blobs/sha256/25ab58f1f776cf6515bd8c54d168ddb4c580966b3e316e202e463b847f61bcb6
+              32  blobs/sha256/4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1
+              30  oci-layout
+               0  blobs
+               0  blobs/sha256

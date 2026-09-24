@@ -1,0 +1,11 @@
+TAG=LUZ028_MATRIX4K512K_20260923T150740Z
+started=2026-09-23T15:07:40+00:00
+mode=run group_mode=0
+sizes=4096,8192,16384,32768,65536,131072,262144,524288 concs=1,2,4,8,16
+de_types=prose,coding de_rounds=5 de_out_tokens=2048 de_out_extra=
+min_free_g=6 cell_timeout=1800
+chunk=8192 chunk_src=live
+live_ctx=600000 metrics_ctx=600000 env_md5=3f6a014d banner_env_md5=3f6a014d
+image=dsv41-sglang-optimized:0.2.8 content_id=4cca364c46778423 banner_content_id=4cca364c46778423
+served_models=deepseek-v4.1-flash
+endpoint=http://127.0.0.1:8899 model=deepseek-v4.1-flash

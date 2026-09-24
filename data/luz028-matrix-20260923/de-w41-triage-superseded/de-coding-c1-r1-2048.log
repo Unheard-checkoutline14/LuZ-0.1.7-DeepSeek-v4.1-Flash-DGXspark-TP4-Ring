@@ -1,0 +1,1 @@
+[de-coding-c1-r1-2048] in=512 out=2048 ch=coding/struct ttft=0.389s ct=365 frames=72 tok/frame=5.07 wall=4.9s itl_p50=63.7ms itl_p10=61.8ms itl_p90=66.5ms decode=80.7 t/s 门禁>90 ⇒ FAIL

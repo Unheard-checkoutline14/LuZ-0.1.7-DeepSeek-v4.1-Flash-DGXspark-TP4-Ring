@@ -1,0 +1,5 @@
+layer blob (compressed sha256) -> decompressed sha256 vs config diff_id
+  2fb11ed24de28bf4...  raw=32,637,625,344  MATCH  (76.3s)
+  68a2b7946f478f57...  raw=     1,909,760  MATCH  (0.0s)
+  4f4fb700ef54461c...  raw=         1,024  MATCH  (0.0s)
+ALL LAYERS CHAIN OK
