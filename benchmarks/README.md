@@ -274,6 +274,120 @@ cells, and **no cell exceeds the law**), with real parallel prefill in 11 cells 
 width 2; it was measured **34/34** on the superseded 4096-chunk archive, where the
 2048 row was the *only* place in the matrix with real parallel prefill.
 
+### 3.3 Two ways to say "131072 tokens", and why the difference is 58 %
+
+The PR matrix's independent variable is *input length*, so the honest question to ask of
+any harness is: **when it writes `input_tokens = 131072`, how many tokens did it actually
+send?** There are three possible answers in this tree, and they are not equivalent:
+
+| caliber | mechanism | harnesses |
+|---|---|---|
+| **token-exact** | build with the real tokenizer, then `assert len(ids) == size` | `pr_matrix_v3.py`, `sd_protocol.py`, `de_matrix_v3.py` |
+| **characters ÷ 4** | treat `len(text) // 4` as a token count | `prv3_collector.py`, `cache_effect_probe.py` |
+| **hardcoded constant** | a literal that stands in for a prompt length | `de_matrix.py` (`512.0`), `de_matrix_structured.py` |
+
+The middle row is the one that shipped. `prv3_collector.py` — the collector behind every
+`../data/prv3-*` and `../data/luz028-matrix-20260923/` archive — fills its prompt like
+this:
+
+```python
+FILL = "Reference notes: the cache stores recently accessed entries. …\n"   # 153 chars
+text = nonce + "\nRead these notes.\n" + FILL * (size // max(len(FILL) // 4, 1) + 8) + INSTR
+ids  = tok.encode(text, add_special_tokens=False).ids
+ids  = ids[:size - len(instr_ids)] + instr_ids          # no assert
+```
+
+`len(FILL) // 4` is **38**, but the tokenizer turns that 153-character filler into
+**24 tokens**. The divisor is therefore 58.3 % too large, so each repetition contributes
+24 tokens where the code assumed 38 — and the `+8` slack does not cover a 58 % deficit.
+The slice never truncates, and the request goes out **short**:
+
+| label | actual tokens sent | actual ÷ label |
+|---:|---:|---:|
+| 512 | 512 | **1.000** |
+| 2048 | 1502 | 0.733 |
+| 4096 | 2798 | 0.683 |
+| 8192 | 5390 | 0.658 |
+| 16384 | 10574 | 0.645 |
+| 32768 | 20918 | 0.638 |
+| 65536 | 41606 | 0.635 |
+| 131072 | 83006 | 0.633 |
+| 262144 | 165782 | 0.632 |
+| 524288 | 331358 | 0.632 |
+
+The bias is **size-dependent**: 512 happens to land exactly (the filler eventually
+saturates the slice target), and every larger row under-fills, converging on **63.2 %**.
+That is the shape that matters — a constant offset would be harmless for row-to-row
+comparisons, but a size-dependent one is not.
+
+**Why the archives still say `prompt_tokens = 131072`.** The collector reads
+`usage.prompt_tokens` and falls back to the label:
+
+```python
+rec.update(prompt_tokens=usage.get("prompt_tokens", size), …)
+```
+
+but its request body **omits `stream_options: {"include_usage": true}`**, so the engine
+never returns a `usage` object and the fallback fires every time. Verified by probe: with
+`stream_options` the engine answers `{"prompt_tokens": 15, …}`; without it, no `usage`
+arrives at all. Every archived `prompt_tokens` is therefore the *label*, not a
+measurement — and it is exactly `== input_tokens` in all ten published archives.
+
+The archives do carry one field that is real: `prompt_chars`. It reproduces **exactly**
+(529102 for the 131072 row) from the offline reconstruction, as does `prompt_sha16`
+(`3ff9076415004f87`). So "this archive came from this construction" is checkable — it is
+just that the construction under-fills its own target.
+
+**What this changes, and what it does not.**
+
+* **Absolute total throughput is inflated by 1.58× at the top rows.** The published
+  aggregate is `Σ(prompt tokens) / wall`, and its numerator is labels. Recomputing with
+  actual tokens: `524288-c1` goes from **5042.18 → 3186.74 t/s**, the `65536-c2` peak from
+  **5823.11 → 3696.84**. Every ratio between two windows is **identical to four decimals**
+  (the numerator scale is common to both operands), so **cross-window and cross-build
+  comparisons are untouched** — the "did 0.2.8 regress against the baseline" question
+  survives intact.
+* **Row-to-row comparisons within one matrix are affected**, because the bias varies with
+  size — and the headline claim is one of the casualties. On labels the fastest row is
+  **65536** (5823.11, +0.22 % over 32768); on actual tokens it is **32768** (3709.08,
+  +0.33 % over 65536). The top three rows are the same set in both (32768 / 65536 /
+  131072), but the "which row is fastest" answer **flips**. Note that the margin is 0.22 %
+  — an order of magnitude below this matrix's own wave spread — so the honest reading is
+  not "32768 is fastest" either, but "the 32768–65536–131072 rows are
+  **indistinguishable**". One adjacent pair also flips sign: `65536 / 32768` is
+  `+0.36 %` on labels and `−0.20 %` on actual tokens. Claims of the form "row X beat row Y
+  by 20 %" (the large separations) are unaffected.
+* **Nothing here is a performance regression.** The engine was fed what it was fed; the
+  wall-clock is real. What is wrong is the *unit* attached to the numerator.
+
+**The measurement that is NOT affected** — and this is worth stating plainly, because the
+opposite was suspected for a while. The windowed counter rate from `prefill_effective_tokens_total`
+that once contradicted `TABLE.md` by 37 % was **right**: it counts engine-side tokens.
+`3151 t/s` measured in-window sits `−1.12 %` from the actual-token aggregate (3186.74) and
+`−37.5 %` from the label-based one. The two numbers disagreed because they were in
+different units, not because either was wrong. Treat *that* as the lesson: when two
+measurements of the same cell differ by a suspiciously round factor, check the units
+before opening an investigation.
+
+**Reproducing the table.** `len(FILL)//4` = 38 vs 24 real tokens, from inside the engine
+container (the only place with the production tokenizer):
+
+```bash
+python3 -c "
+from tokenizers import Tokenizer
+tok = Tokenizer.from_file('/models/DeepSeek-V4.1-Flash/tokenizer.json')
+F = 'Reference notes: the cache stores recently accessed entries. An implementation should maintain ordering, handle replacement and validate its invariants.\n'
+print(len(F), len(F)//4, len(tok.encode(F, add_special_tokens=False).ids))"   # 153 38 24
+```
+
+**Status.** The published archives are **not** being rewritten — they are the record of
+what was run, and `prompt_chars` plus `prompt_sha16` let anyone audit them. What changes
+is the label: the `total t/s` column in `../data/prv3-*/` and
+`../data/luz028-matrix-20260923/` is **"tokens as labelled per second"**, and any
+absolute claim that quotes it must say so. `pr_matrix_v3.py` — the harness named as the
+current PR harness in §1 — does it correctly (real tokenizer + `assert`); the collector in
+the archive path does not, and the two have been conflated in the documentation until now.
+
 ---
 
 ## 4. Sanitization: what is benign, and one class that is not
