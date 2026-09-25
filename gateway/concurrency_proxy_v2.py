@@ -31,8 +31,24 @@ Design highlights:
 Streaming pipeline (four stages): atomic dedup placeholder -> early stream
 open + heartbeat -> producer (connect / first byte / TTFT budget / pump) runs
 in parallel with consumer (client write loop) -> drain and finalize.
-Everything after the early stream open fails closed into error frames followed
-by `data: [DONE]` -- the handler never raises past the stream open.
+
+Failure contract after the stream is open. The handler never raises past the
+stream open, and **every** failure path terminates the stream explicitly rather
+than letting the client see a clean EOF after partial content:
+
+  * errors are emitted as OpenAI ``chat.completion.chunk`` frames carrying an
+    ``error`` key (a bare ``{"error": ...}`` object makes clients that parse
+    ``choices`` strictly surface an unattributable stream failure);
+  * frames are enqueued through a non-raising helper -- a full queue drops the
+    frame, counts it, and logs it, instead of throwing into the pump loop;
+  * a mid-flight upstream read failure (RST, truncated payload, ...) emits an
+    error frame before the terminator;
+  * an error frame is always followed by ``data: [DONE]``;
+  * chunk-idle expiry logs rx (bytes read from the engine) / tx (bytes actually
+    delivered to the client) and elapsed time, and adds the delivered byte count
+    to a cumulative counter, so a stalled stream is attributable after the fact.
+    Heartbeat comment frames are excluded from that byte count.
+
 Non-streaming responses are relayed with the same incremental discipline
 (read/write chunk by chunk, per-write timeout) instead of whole-body buffering.
 
@@ -40,6 +56,8 @@ Timeout semantics:
   FIRST_TOKEN_TIMEOUT   time to first upstream byte (connect + read share it)
   HEARTBEAT_INTERVAL    SSE keep-alive comment-frame interval while pending
   CHUNK_IDLE_TIMEOUT    max gap between upstream chunks after the first byte
+                        (raise it above the worst-case decode stall: long
+                        reasoning generations can pause for minutes)
   WRITE_TIMEOUT         max single write to a slow client (protects the
                         admission slot from being leaked by a stalled drain)
   TOTAL_STREAM_TIMEOUT  hard cap on the whole stream lifetime
@@ -66,7 +84,7 @@ test for the sanitizer ship next to this file.
 
 Environment variables (name = default):
   UPSTREAM=http://127.0.0.1:8002  PORT=8001  MAX_CONCURRENCY=6
-  QUEUE_TIMEOUT=20   FIRST_TOKEN_TIMEOUT=600   CHUNK_IDLE_TIMEOUT=180
+  QUEUE_TIMEOUT=20   FIRST_TOKEN_TIMEOUT=600   CHUNK_IDLE_TIMEOUT=600
   HEARTBEAT_INTERVAL=5   RETRY_CONNECT=1   NONSTREAM_TOTAL_TIMEOUT=900
   WRITE_TIMEOUT=60   TOTAL_STREAM_TIMEOUT=7200   DEDUP_ENABLE=1   GW_API_KEY=
   INJECT_ENABLE_THINKING=0   SANITIZE_IMAGE_PLACEHOLDER=1
@@ -91,7 +109,7 @@ PORT = int(os.environ.get("PORT", "8001"))
 MAX_CONCURRENCY = int(os.environ.get("MAX_CONCURRENCY", "6"))
 QUEUE_TIMEOUT = float(os.environ.get("QUEUE_TIMEOUT", "20"))
 FIRST_TOKEN_TIMEOUT = float(os.environ.get("FIRST_TOKEN_TIMEOUT", "600"))
-CHUNK_IDLE_TIMEOUT = float(os.environ.get("CHUNK_IDLE_TIMEOUT", "180"))
+CHUNK_IDLE_TIMEOUT = float(os.environ.get("CHUNK_IDLE_TIMEOUT", "600"))
 HEARTBEAT_INTERVAL = float(os.environ.get("HEARTBEAT_INTERVAL", "5"))
 RETRY_CONNECT = int(os.environ.get("RETRY_CONNECT", "1"))
 NONSTREAM_TOTAL_TIMEOUT = float(os.environ.get("NONSTREAM_TOTAL_TIMEOUT", "900"))
@@ -101,9 +119,9 @@ DEDUP_ENABLE = os.environ.get("DEDUP_ENABLE", "1") == "1"
 GW_API_KEY = os.environ.get("GW_API_KEY", "")
 # enable_thinking 注入：默认 off——off = 现行为零变化
 INJECT_ENABLE_THINKING = os.environ.get("INJECT_ENABLE_THINKING", "0") == "1"
-# 图像占位符净化：默认 on；=0 回退现行为
+# 图像占位符净化：默认 on（修复会话语料被引擎硬 400 打断）；=0 回退现行为
 SANITIZE_IMAGE_PLACEHOLDER = os.environ.get("SANITIZE_IMAGE_PLACEHOLDER", "1") == "1"
-VERSION = "concurrency-proxy-v2-rc3.7.1"
+VERSION = "concurrency-proxy-v2-rc3.8.2"
 
 HEARTBEAT = b": keepalive\n\n"          # SSE 注释帧：OpenAI SDK/EventSource 忽略
 DONE_MARK = b"data: [DONE]\n\n"         # 错误帧后的终止符（SDK 正常收尾）
@@ -122,6 +140,7 @@ METRICS = {
     "requests_total": 0, "streams_total": 0,
     "rejected_429_queue": 0, "rejected_429_duplicate": 0,
     "first_token_timeouts": 0, "chunk_idle_timeouts": 0,
+    "chunk_idle_bytes_sent": 0, "queue_full_drops": 0,
     "write_timeouts": 0, "stream_total_timeouts": 0,
     "upstream_errors": 0, "client_disconnects": 0,
     "image_placeholders_sanitized": 0, "image_sanitize_requests": 0,
@@ -194,7 +213,7 @@ def upstream_url(request: web.Request) -> str:
 
 def is_stream(body: bytes) -> bool:
     """仅显式布尔 stream:true 走流式（字符串/数字等真值一律非流式）。
-    字节 prefilter：body 无 "stream" 键字节串则跳过 json.loads（语义零变化
+    prefilter：body 无 "stream" 键字节串则跳过 json.loads（语义零变化
     ——无该键的 JSON 与非法 body 原本就返回 False；最常见非流式请求全免解析）。"""
     if b'"stream"' not in body:
         return False
@@ -231,7 +250,7 @@ def maybe_inject(body: bytes, path: str) -> bytes:
         return body                          # 非法 body：跳注入，走原转发逻辑
 
 
-# 图像占位符净化 ---------------------------------------------------
+# 图像占位符净化 -----------------------------------------------------
 # 客户端在后续轮次把历史图像序列化为字面文本 '<｜deepseek_image｜>'，引擎
 # encoding_dsv41._validate_no_image_sp_tokens 硬 400 → 会话被打断。图像字节
 # 不在请求里、无法复原 ⇒ 降级净化：占位符替换为 '[图像]'，请求放行。
@@ -307,9 +326,16 @@ def resp_429(msg: str, wait: int) -> web.Response:
 
 
 def err_frame(etype: str, msg: str) -> bytes:
-    """固定文案错误帧 + [DONE] 终止符（细节仅入日志，不入帧）。"""
-    return (b"data: " + json.dumps({"error": {
-        "message": msg, "type": etype}}).encode() + b"\n\n" + DONE_MARK)
+    """固定文案错误帧 + [DONE] 终止符（细节仅入日志，不入帧）。
+    帧体补 OpenAI chunk 骨架——裸 {"error":…} 帧会让按 choices 严格解析的
+    客户端（AI SDK 系）产出不可归因的流失败。error 键原样保留，故按 error 键
+    判错的消费方语义不变。并补 created/model 两个 ChatCompletionChunk 必填
+    字段，避免严格校验（pydantic／部分 Java SDK）对缺字段报错。"""
+    body = {"error": {"message": msg, "type": etype},
+            "id": "gateway-error", "object": "chat.completion.chunk",
+            "created": 0, "model": "gateway-error",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": None}]}
+    return (b"data: " + json.dumps(body).encode() + b"\n\n" + DONE_MARK)
 
 
 # ---------------------------------------------------------------- 流式
@@ -356,7 +382,20 @@ async def handle_stream(request: web.Request, body: bytes,
     q: asyncio.Queue = asyncio.Queue(maxsize=256)
     DONE = object()
     first_seen = asyncio.Event()             # 首字节到达（TTFT 预算监管点）
+    stat = {"rx": 0, "tx": 0}    # rx=引擎侧已读字节 tx=已写客户端字节
     tasks: list[asyncio.Task] = []
+
+    def put_frame(frame: object) -> bool:
+        """错误帧/DONE 入队绝不抛出——队列满（256）时丢帧 + 计数 + 留痕。
+        直抛会被 pump 级 except Exception 捕获，既误计 upstream_errors，又让
+        客户端收不到错误帧（表现为静默截断）。"""
+        try:
+            q.put_nowait(frame)
+            return True
+        except asyncio.QueueFull:
+            METRICS["queue_full_drops"] += 1
+            log.warning("frame dropped (queue full): %s", request.raw_path)
+            return False
 
     async def heartbeat() -> None:
         while True:
@@ -391,7 +430,7 @@ async def handle_stream(request: web.Request, body: bytes,
                         log.warning("upstream rejected %s %s body=%.300s",
                                     u.status, request.raw_path, await u.text())
                         u.close()                       # 不留句柄，防误读 error body
-                        q.put_nowait(err_frame(
+                        put_frame(err_frame(
                             "gateway_upstream",
                             "upstream rejected the request (see gateway log)"))
                         return
@@ -406,7 +445,7 @@ async def handle_stream(request: web.Request, body: bytes,
                     METRICS["upstream_errors"] += 1
                     log.warning("upstream connect failed %s: %s",
                                 request.raw_path, last_err)
-                    q.put_nowait(err_frame(
+                    put_frame(err_frame(
                         "gateway_upstream",
                         "upstream connect failed (see gateway log)"))
                     return
@@ -426,7 +465,7 @@ async def handle_stream(request: web.Request, body: bytes,
                 METRICS["first_token_timeouts"] += 1
                 log.warning("first-token timeout %.0fs %s",
                             FIRST_TOKEN_TIMEOUT, request.raw_path)
-                q.put_nowait(err_frame(
+                put_frame(err_frame(
                     "gateway_first_token_timeout",
                     f"no first token from engine within "
                     f"{FIRST_TOKEN_TIMEOUT:.0f}s (long prefill); "
@@ -437,7 +476,7 @@ async def handle_stream(request: web.Request, body: bytes,
             except Exception as e:
                 METRICS["upstream_errors"] += 1
                 log.warning("first read failed %s: %r", request.raw_path, e)
-                q.put_nowait(err_frame(
+                put_frame(err_frame(
                     "gateway_upstream",
                     "upstream stream failed before first token (see gateway log)"))
                 return
@@ -452,6 +491,7 @@ async def handle_stream(request: web.Request, body: bytes,
             #      put 无超时（等价 v1 直通语义），readany 仍受 CHUNK_IDLE 约束，
             #      两者分 try 捕获，超时语义互不污染）
             data = first
+            stat["rx"] += len(first)
             try:
                 while data:
                     await q.put(data)
@@ -461,16 +501,29 @@ async def handle_stream(request: web.Request, body: bytes,
                             timeout=CHUNK_IDLE_TIMEOUT)
                     except asyncio.TimeoutError:
                         METRICS["chunk_idle_timeouts"] += 1
-                        q.put_nowait(err_frame(
+                        METRICS["chunk_idle_bytes_sent"] += stat["tx"]
+                        # 断流必须留痕（否则受害请求不可考）
+                        log.warning(
+                            "chunk idle > %.0fs, cut: %s rx=%d tx=%d "
+                            "elapsed=%.1fs",
+                            CHUNK_IDLE_TIMEOUT, request.path,
+                            stat["rx"], stat["tx"], time.monotonic() - t0)
+                        put_frame(err_frame(
                             "gateway_chunk_idle",
                             f"upstream stream idle > {CHUNK_IDLE_TIMEOUT:.0f}s "
                             f"after first token"))
                         return
+                    stat["rx"] += len(data)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 METRICS["upstream_errors"] += 1
                 log.warning("pump error %s: %r", request.path, e)
+                # 中途读失败必须补错误帧，否则客户端看到「部分内容 + 干净
+                # [DONE]」（静默截断，与 idle 分支同型）。细节仅入日志。
+                put_frame(err_frame(
+                    "gateway_upstream",
+                    "upstream stream failed mid-flight (see gateway log)"))
         except asyncio.CancelledError:
             raise
         finally:
@@ -492,6 +545,8 @@ async def handle_stream(request: web.Request, body: bytes,
                                 TOTAL_STREAM_TIMEOUT, request.path)
                     break
                 await asyncio.wait_for(resp.write(item), timeout=WRITE_TIMEOUT)
+                if item is not HEARTBEAT:     # 心跳不计入交付字节
+                    stat["tx"] += len(item)
         except asyncio.TimeoutError:                     # 写客户端超时（慢读）
             METRICS["write_timeouts"] += 1
             log.warning("client write timeout %.0fs: %s",
@@ -504,8 +559,8 @@ async def handle_stream(request: web.Request, body: bytes,
     tasks.extend((hb, consumer_t))
 
     def finish_err(etype: str, msg: str) -> None:
-        q.put_nowait(err_frame(etype, msg))
-        q.put_nowait(DONE)
+        put_frame(err_frame(etype, msg))
+        put_frame(DONE)                   # 队列满时 producer finally 阻塞 put 兜底
 
     producer_t = asyncio.create_task(producer())
     tasks.append(producer_t)
