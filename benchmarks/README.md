@@ -24,6 +24,7 @@ If you want to re-derive a number rather than trust it, start here and in
 | `pr_matrix_v2.py` | ⚠️ **superseded — its archive is withdrawn as a baseline (2026-09-18).** Kept source-only so the withdrawal can be audited: it did not flush the radix cache between cells, could not distinguish parallel prefill from queued prefill, and reported per-stream rates rather than total throughput | `../data/sd1-20260918/pr/` (35 cells) — **numbers must not be quoted** | — |
 | `pr_matrix_v3.py` | **PR-v3, the current PR harness.** Pure-prefill total throughput: `max_new_tokens=1`, fresh nonce per request, `POST /flush_cache` between cells, total = `Σ(prompt tokens) / wall-clock (arm start → last stream end)`. 8 sizes (512…131072) × 5 concurrencies, 1 wave | `../data/prv3-v14-20260919/` (40/40 cells, chunk 8192, **current**) + `../data/prv3-20260918/` (34/35 cells, chunk 4096 — superseded, numbers not to be quoted) | FINAL-METRICS §3 |
 | `pr_v3_concurrency.py` | **re-analysis, not a new measurement.** Clusters the archived per-stream first-token instants to decide whether a cell really prefilled more than one request per step. Needed because `ttft_overlap_peak` is degenerate when `max_new_tokens=1` (`t_end − t_first ≈ 0.1 ms`, so the span sweep can never reach 2). Takes the chunk size as its third argument (default 4096 = the 09-18 archive; pass 8192 for v14) | consumes `../data/prv3-v14-20260919/raw/` and `../data/prv3-20260918/raw/` | FINAL-METRICS §3.3 |
+| `../bench/prv3_collector.py` | ⚠️ **the collector behind the 0.2.8 release matrix.** Same cells as `pr_matrix_v3.py`, but it sizes its prompt by **characters ÷ 4** instead of by the tokenizer, so its requests go out short — and the `prompt_tokens` it writes is the *label*, not a measurement. Its archive header names this file by hash (`md5 bbda3e75…`), and `prompt_chars` in that archive is what pins the construction. Read **§3.3 before quoting any number** from it | `../data/luz028-matrix-20260923/` (**50/50 cells, the 0.2.8 release matrix**) | FINAL-METRICS §3, §3.3 |
 | `pr_engine_steps.py` | the **third** evidence channel for the prefill admission law: attributes the scheduler's own `Prefill batch` lines to cells by wall-clock window and tests `max #new-seq`, `sum #new-token == C x input` and `max #queue-req` against the prediction | `../data/sd1-20260918/pr/engine-steps.log` (the pr-window lines) + a per-cell table | FINAL-METRICS §3 |
 | `grammar_ab.py` | guided-decoding cost: `sampling_params.json_schema` present vs absent, same prompt body, separate nonces | `../data/sd1-20260918/grammar/`, `.../grammar2/` | FINAL-METRICS §5.1 |
 | `gw_ab_v2.py` | the `:8001` gateway vs direct `:8899`, three arms (prefill / decode / **wall, not streamed**) | `../data/sd1-20260918/gw/` | FINAL-METRICS §6 |
@@ -284,11 +285,16 @@ send?** There are three possible answers in this tree, and they are not equivale
 |---|---|---|
 | **token-exact** | build with the real tokenizer, then `assert len(ids) == size` | `pr_matrix_v3.py`, `sd_protocol.py`, `de_matrix_v3.py` |
 | **characters ÷ 4** | treat `len(text) // 4` as a token count | `prv3_collector.py`, `cache_effect_probe.py` |
-| **hardcoded constant** | a literal that stands in for a prompt length | `de_matrix.py` (`512.0`), `de_matrix_structured.py` |
+| **hardcoded constant** | a literal that stands in for a prompt length | `de_matrix.py` (`512.0` **every** time), `de_matrix_structured.py` (`pt or 512.0` — a *fallback*, so it only stands in when the engine reports nothing) |
 
-The middle row is the one that shipped. `prv3_collector.py` — the collector behind every
-`../data/prv3-*` and `../data/luz028-matrix-20260923/` archive — fills its prompt like
-this:
+Note which row reaches the published archives: only the middle one. `prv3_collector.py`
+produced the three most recent PR archives (`prv3-v18-20260919`,
+`prv3-v19-40217prep-20260920`, `luz028-matrix-20260923`); the third row's harnesses emit no
+table in `../data/` (their archives are kept as-is, §3.2); the first row is the current,
+correct implementation. For the two oldest archives see the evidence limit noted below.
+
+The middle row is the one that shipped. `prv3_collector.py` — self-identified by hash in
+the archive headers of the three archives above — fills its prompt like this:
 
 ```python
 FILL = "Reference notes: the cache stores recently accessed entries. …\n"   # 153 chars
@@ -331,12 +337,25 @@ but its request body **omits `stream_options: {"include_usage": true}`**, so the
 never returns a `usage` object and the fallback fires every time. Verified by probe: with
 `stream_options` the engine answers `{"prompt_tokens": 15, …}`; without it, no `usage`
 arrives at all. Every archived `prompt_tokens` is therefore the *label*, not a
-measurement — and it is exactly `== input_tokens` in all ten published archives.
+measurement — and it is exactly `== input_tokens` in **1194 of 1194** stream records across
+all six released PR archive locations (`prv3-20260918`, `prv3-v14-20260919`,
+`prv3-v18-20260919`, `prv3-v18-512k-20260920`, `prv3-v19-40217prep-20260920`,
+`luz028-matrix-20260923`).
 
-The archives do carry one field that is real: `prompt_chars`. It reproduces **exactly**
-(529102 for the 131072 row) from the offline reconstruction, as does `prompt_sha16`
-(`3ff9076415004f87`). So "this archive came from this construction" is checkable — it is
-just that the construction under-fills its own target.
+One limit deserves stating, because the archives do not all carry the same evidence. A
+non-zero `prompt_chars` is this collector's fingerprint, and only **745 of the 1194**
+records have it — the two oldest archives (`prv3-20260918`, `prv3-v14-20260919`) record
+`prompt_chars = 0`, so their construction cannot be reproduced offline the way the newer
+three can. `prv3-v14-20260919` predates this collector (the collector's own header calls
+itself a *rebuild* whose caliber was taken from that archive's `TABLE.md`), so its prompt
+sizing is a **different, older code path whose caliber has not been established**. The
+`== input_tokens` identity still holds for it, and the short-request mechanism is the same
+family, but do not cite this section as proof about it.
+
+The newer archives do carry one field that is real: `prompt_chars`. It reproduces
+**exactly** (529102 for the 131072 row) from the offline reconstruction, as does
+`prompt_sha16` (`3ff9076415004f87`). So "this archive came from this construction" is
+checkable — it is just that the construction under-fills its own target.
 
 **What this changes, and what it does not.**
 
@@ -349,14 +368,16 @@ just that the construction under-fills its own target.
   survives intact.
 * **Row-to-row comparisons within one matrix are affected**, because the bias varies with
   size — and the headline claim is one of the casualties. On labels the fastest row is
-  **65536** (5823.11, +0.22 % over 32768); on actual tokens it is **32768** (3709.08,
-  +0.33 % over 65536). The top three rows are the same set in both (32768 / 65536 /
-  131072), but the "which row is fastest" answer **flips**. Note that the margin is 0.22 %
-  — an order of magnitude below this matrix's own wave spread — so the honest reading is
-  not "32768 is fastest" either, but "the 32768–65536–131072 rows are
-  **indistinguishable**". One adjacent pair also flips sign: `65536 / 32768` is
-  `+0.36 %` on labels and `−0.20 %` on actual tokens. Claims of the form "row X beat row Y
-  by 20 %" (the large separations) are unaffected.
+  **65536** (5823.11, **+0.22 %** over 32768); on actual tokens it is **32768** (3709.08,
+  **+0.33 %** over 65536). The top three rows are the same set in both (32768 / 65536 /
+  131072), but the "which row is fastest" answer **flips**. Both margins — 0.22 % and
+  0.33 % — are an order of magnitude below this matrix's own wave spread, so the honest
+  reading is not "32768 is fastest" either, but "the 32768–65536–131072 rows are
+  **indistinguishable**". The same adjacent pair also flips sign on either basis, so state
+  the basis: as a **row peak** (65536 @ C2 vs 32768 @ C4) the ratio `65536 / 32768` is
+  `+0.22 %` on labels and `−0.33 %` on actual tokens; as a **single-stream pair** (C=1) it
+  is `+0.36 %` and `−0.20 %`. Claims of the form "row X beat row Y by 20 %" (the large
+  separations) are unaffected.
 * **Nothing here is a performance regression.** The engine was fed what it was fed; the
   wall-clock is real. What is wrong is the *unit* attached to the numerator.
 
@@ -381,12 +402,12 @@ print(len(F), len(F)//4, len(tok.encode(F, add_special_tokens=False).ids))"   # 
 ```
 
 **Status.** The published archives are **not** being rewritten — they are the record of
-what was run, and `prompt_chars` plus `prompt_sha16` let anyone audit them. What changes
-is the label: the `total t/s` column in `../data/prv3-*/` and
-`../data/luz028-matrix-20260923/` is **"tokens as labelled per second"**, and any
-absolute claim that quotes it must say so. `pr_matrix_v3.py` — the harness named as the
-current PR harness in §1 — does it correctly (real tokenizer + `assert`); the collector in
-the archive path does not, and the two have been conflated in the documentation until now.
+what was run; the re-derivable fields (`prompt_chars`, `prompt_sha16`, where present) stay
+as they were so anyone can audit them. What changes is the label: the `total t/s` column in
+the affected archives is **"tokens as labelled per second"**, and any absolute claim that
+quotes it must say so. `pr_matrix_v3.py` — the harness named as the current PR harness in
+§1 — does it correctly (real tokenizer + `assert`); the collector in the archive path does
+not, and the two have been conflated in the documentation until now.
 
 ---
 
